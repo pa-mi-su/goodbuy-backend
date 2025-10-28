@@ -3,9 +3,11 @@ package app.goodbuy.products;
 import jakarta.validation.constraints.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+@Validated
 @RestController
 @RequestMapping(value = "/v1/products", produces = MediaType.APPLICATION_JSON_VALUE)
 public class ProductController {
@@ -18,7 +20,7 @@ public class ProductController {
 
     @GetMapping("/{gtin}")
     public ProductDto getProduct(
-            @PathVariable
+            @PathVariable("gtin")
             @Pattern(regexp = "^[0-9A-Za-z-_.]{5,64}$", message = "Invalid GTIN format")
             String gtin
     ) {
