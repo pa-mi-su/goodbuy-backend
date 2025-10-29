@@ -1,5 +1,7 @@
 package app.goodbuy.products;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -15,6 +17,8 @@ import java.time.Duration;
 @RequestMapping(value = "/v1/products", produces = MediaType.APPLICATION_JSON_VALUE)
 public class ProductController {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductController.class);
+
     private final ProductService service;
     private final BarcodeNormalizer normalizer;
 
@@ -25,19 +29,27 @@ public class ProductController {
 
     @GetMapping("/{gtin}")
     public ResponseEntity<ProductDto> getProduct(@PathVariable("gtin") String rawGtin) {
-        // 1) Normalize & validate input → GTIN-14 (throws 422 on invalid)
+        // 1️⃣ Normalize & validate input → GTIN-14 (throws 422 on invalid)
         String gtin14 = normalizer.normalizeToGtin14OrThrow(rawGtin);
 
-        // 2) Look up product
+        // 2️⃣ Look up product
         ProductDto dto = service.getByGtinOrNull(gtin14);
         if (dto == null) {
-            // Consistent 404 when not found
+            log.warn("product not found gtin14={}", gtin14);
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "not found");
         }
 
-        // 3) Return the product with a small public cache to reduce repeat hits
+        // 3️⃣ App-level structured info log (MDC carries requestId automatically)
+        log.info("served product gtin14={} name={} brand={}",
+                gtin14, safe(dto.name()), safe(dto.brand()));
+
+        // 4️⃣ Return JSON with short public cache headers
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePublic())
                 .body(dto);
+    }
+
+    private static String safe(String s) {
+        return s == null ? "—" : s;
     }
 }
