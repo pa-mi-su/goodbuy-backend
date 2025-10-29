@@ -1,7 +1,11 @@
-app/goodbuy/web/GlobalErrorHandler$ErrorBody.class
 app/goodbuy/GoodBuyBackendApplication.class
 app/goodbuy/config/CorsConfig.class
-app/goodbuy/products/ProductController.class
 app/goodbuy/web/GlobalErrorHandler.class
 app/goodbuy/products/ProductService.class
+app/goodbuy/api/ErrorResponse.class
+app/goodbuy/api/GlobalExceptionHandler.class
+app/goodbuy/web/GlobalErrorHandler$ErrorBody.class
+app/goodbuy/api/RequestLoggingFilter.class
+app/goodbuy/products/BarcodeNormalizer.class
+app/goodbuy/products/ProductController.class
 app/goodbuy/config/OpenApiConfig.class
