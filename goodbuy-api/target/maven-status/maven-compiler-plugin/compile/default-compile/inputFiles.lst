@@ -5,5 +5,6 @@
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-api/src/main/java/app/goodbuy/config/OpenApiConfig.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-api/src/main/java/app/goodbuy/GoodBuyBackendApplication.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-api/src/main/java/app/goodbuy/config/CorsConfig.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-api/src/main/java/app/goodbuy/api/RequestLoggingFilter.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-api/src/main/java/app/goodbuy/api/GlobalExceptionHandler.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-api/src/main/java/app/goodbuy/api/ErrorResponse.java
