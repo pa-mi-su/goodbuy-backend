@@ -2,11 +2,18 @@ package app.goodbuy.catalog;
 
 import app.goodbuy.products.ProductDto;
 
+import java.util.Optional;
+
 /**
- * Minimal contract for any external barcode catalog (EAN-DB, UPCitemdb, etc.).
- * Returning null means "not found".
- * Implementations MUST normalize inputs to GTIN-14 before calling the remote API.
+ * Abstraction for any external product catalog.
+ * Input must be a normalized GTIN-14 string.
  */
 public interface ExternalCatalogClient {
-    ProductDto lookupByGtin14(String gtin14) throws Exception;
+    /**
+     * Finds a product by GTIN-14.
+     * @param gtin14 normalized 14-digit GTIN
+     * @return Optional with ProductDto if found, otherwise empty.
+     * @throws CatalogTransportException for HTTP/timeouts/decoding issues.
+     */
+    Optional<ProductDto> findByGtin(String gtin14) throws CatalogTransportException;
 }
