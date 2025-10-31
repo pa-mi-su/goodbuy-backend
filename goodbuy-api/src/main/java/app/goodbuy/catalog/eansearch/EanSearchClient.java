@@ -1,118 +1,135 @@
 package app.goodbuy.catalog.eansearch;
 
+import app.goodbuy.catalog.CatalogTransportException;
 import app.goodbuy.catalog.ExternalCatalogClient;
 import app.goodbuy.products.ProductDto;
-import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestTemplate;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
 /**
- * Thin client for an external EAN/UPC lookup API.
- * Returns null when not found. Throws on transport errors.
- * NOTE: This class is defined but NOT YET WIRED into ProductService (no behavior change).
+ * Lightweight client for the EAN-Search.org API.
+ * Example request:
+ *   https://api.ean-search.org/api?op=barcode-ean&format=json&key=YOUR_KEY&ean=CODE
  */
 public class EanSearchClient implements ExternalCatalogClient {
+    private static final Logger log = LoggerFactory.getLogger(EanSearchClient.class);
 
-    private final RestTemplate http;
+    private final HttpClient http;
+    private final ObjectMapper om = new ObjectMapper();
+
     private final String baseUrl;
     private final String apiKey;
+    private final int connectTimeoutMs;
+    private final int readTimeoutMs;
 
     public EanSearchClient(String baseUrl, String apiKey, int connectTimeoutMs, int readTimeoutMs) {
-        this.baseUrl = Objects.requireNonNull(baseUrl, "baseUrl");
-        this.apiKey = Objects.requireNonNull(apiKey, "apiKey");
-        this.http = new RestTemplateBuilder()
-                .setConnectTimeout(Duration.ofMillis(connectTimeoutMs))
-                .setReadTimeout(Duration.ofMillis(readTimeoutMs))
+        this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        this.apiKey = apiKey;
+        this.connectTimeoutMs = connectTimeoutMs;
+        this.readTimeoutMs = readTimeoutMs;
+        this.http = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(Math.max(100, connectTimeoutMs)))
                 .build();
+        log.info("EAN-Search client initialized baseUrl={} connect={}ms read={}ms",
+                baseUrl, connectTimeoutMs, readTimeoutMs);
     }
 
     @Override
-    public ProductDto lookupByGtin14(String gtin14) throws Exception {
-        var uri = URI.create(String.format(
-                "%s?op=barcode-lookup&ean=%s&format=json&key=%s",
-                baseUrl, gtin14, apiKey));
+    public Optional<ProductDto> findByGtin(String gtin14) throws CatalogTransportException {
+        // EAN-Search expects EAN-13, not GTIN-14 → drop leading zero if present
+        String ean13 = (gtin14 != null && gtin14.length() == 14 && gtin14.startsWith("0"))
+                ? gtin14.substring(1)
+                : gtin14;
 
         try {
-            ResponseEntity<Map> resp = http.exchange(uri, HttpMethod.GET, null, Map.class);
-            if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null) {
-                return mapToDto(gtin14, resp.getBody());
+            String uri = baseUrl
+                    + "?op=barcode-ean&format=json"
+                    + "&key=" + URLEncoder.encode(apiKey, StandardCharsets.UTF_8)
+                    + "&ean=" + URLEncoder.encode(ean13, StandardCharsets.UTF_8);
+
+            HttpRequest req = HttpRequest.newBuilder(URI.create(uri))
+                    .timeout(Duration.ofMillis(Math.max(100, readTimeoutMs)))
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            int sc = res.statusCode();
+            String body = res.body();
+            log.debug("EAN-Search GET {} -> status={} bytes={}", uri, sc, body == null ? 0 : body.length());
+
+            if (sc == 404) {
+                log.debug("EAN-Search miss gtin14={} (404)", gtin14);
+                return Optional.empty();
             }
-            return null;
-        } catch (HttpClientErrorException.NotFound e) {
-            return null;
+            if (sc < 200 || sc >= 300) {
+                throw new CatalogTransportException("eansearch_http_" + sc + ": " + truncate(body, 400));
+            }
+
+            JsonNode root = om.readTree(body);
+            JsonNode resultArray = root.path("result");
+            if (!resultArray.isArray() || resultArray.size() == 0) {
+                log.debug("EAN-Search empty result for {}", gtin14);
+                return Optional.empty();
+            }
+
+            JsonNode first = resultArray.get(0);
+
+            String ean = text(first, "ean");
+            if (ean == null || ean.isBlank()) ean = ean13;
+
+            String name = text(first, "name", "title", "product");
+            String brand = text(first, "brand", "manufacturer", "company");
+            String category = text(first, "category");
+
+            List<String> images = new ArrayList<>();
+            String img = text(first, "image");
+            if (img != null && !img.isBlank()) images.add(img);
+
+            ProductDto dto = new ProductDto(
+                    ean, emptyToNull(name), emptyToNull(brand), emptyToNull(category),
+                    images, List.of(), List.of(), List.of()
+            );
+
+            log.debug("EAN-Search hit ean={} name={} brand={}", ean, safe(name), safe(brand));
+            return Optional.of(dto);
+
+        } catch (CatalogTransportException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new CatalogTransportException("eansearch_transport: " + e.getMessage(), e);
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private ProductDto mapToDto(String gtin14, Map<String, Object> body) {
-        Map<String, Object> p = null;
-        Object productObj = body.get("product");
-        Object productsObj = body.get("products");
-
-        if (productObj instanceof Map<?, ?> m) {
-            p = (Map<String, Object>) m;
-        } else if (productsObj instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof Map<?, ?> m) {
-            p = (Map<String, Object>) m;
-        }
-        if (p == null) return null;
-
-        String name = firstNonBlank(p, "name", "title", "product", "description");
-        String brand = firstNonBlank(p, "brand", "manufacturer");
-        String cat = firstNonBlank(p, "category", "category_name");
-
-        List<String> images = toStringList(p.get("images"));
-        if (images == null || images.isEmpty()) {
-            images = toStringList(p.get("image_urls"));
-        }
-        if (images == null || images.isEmpty()) {
-            String single = asString(p.get("image"));
-            if (single != null && !single.isBlank()) images = List.of(single.trim());
-        }
-        if (images == null) images = List.of();
-
-        return new ProductDto(
-                gtin14,
-                emptyToNull(name),
-                emptyToNull(brand),
-                emptyToNull(cat) == null ? "cleaner" : cat,
-                images,
-                List.of(),
-                List.of(),
-                List.of()
-        );
-    }
-
-    private static String firstNonBlank(Map<String, Object> m, String... keys) {
+    private static String text(JsonNode node, String... keys) {
         for (String k : keys) {
-            String s = asString(m.get(k));
-            if (s != null && !s.isBlank()) return s.trim();
-        }
-        return null;
-    }
-
-    private static String asString(Object o) {
-        return (o instanceof String s) ? s : null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private static List<String> toStringList(Object o) {
-        if (o instanceof List<?> list) {
-            List<String> out = new ArrayList<>();
-            for (Object e : list) {
-                if (e instanceof String s && !s.isBlank()) out.add(s.trim());
+            JsonNode v = node.path(k);
+            if (!v.isMissingNode() && !v.isNull()) {
+                String s = v.asText(null);
+                if (s != null && !s.isBlank()) return s;
             }
-            return out;
         }
         return null;
     }
 
-    private static String emptyToNull(String s) {
-        return (s == null || s.isBlank()) ? null : s;
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
+
+    private static String emptyToNull(String s) { return (s == null || s.isBlank()) ? null : s; }
+    private static String safe(String s) { return s == null ? "-" : s; }
 }

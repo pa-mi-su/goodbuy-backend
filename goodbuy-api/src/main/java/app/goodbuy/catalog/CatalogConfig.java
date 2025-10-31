@@ -1,53 +1,56 @@
 package app.goodbuy.catalog;
 
-import app.goodbuy.catalog.eansearch.EanSearchClient;
+import app.goodbuy.catalog.eandb.EanDbCatalogClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Registers an ExternalCatalogClient when explicitly enabled and the provider is "eansearch".
- * Keeps the seam small so we can add more providers later without touching callers.
+ * Wires the external catalog client(s).
+ * Currently only EAN-DB is supported.
  */
 @Configuration
-@EnableConfigurationProperties(CatalogProperties.class)
+@ConditionalOnProperty(name = "goodbuy.catalog.enabled", havingValue = "true")
 public class CatalogConfig {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogConfig.class);
 
+    /**
+     * Single external catalog client: EAN-DB
+     * Created only when:
+     *   - goodbuy.catalog.enabled=true  (class-level)
+     *   - goodbuy.catalog.provider=eandb (method-level)
+     *
+     * Expect base-url like: https://ean-db.com/api/v2/product
+     * (The client will append "/{EAN13}" itself.)
+     */
     @Bean
-    @ConditionalOnProperty(
-            prefix = "goodbuy.catalog",
-            name = {"enabled", "provider"},
-            havingValue = "eansearch",
-            matchIfMissing = false
-    )
-    public ExternalCatalogClient eanSearchCatalogClient(CatalogProperties props) {
-        var p = props.getEansearch();
+    @ConditionalOnProperty(name = "goodbuy.catalog.provider", havingValue = "eandb")
+    public ExternalCatalogClient eandbClient(
+            @Value("${goodbuy.catalog.eandb.base-url}") String baseUrl,
+            @Value("${goodbuy.catalog.eandb.jwt}") String jwt,
+            @Value("${goodbuy.catalog.eandb.connect-timeout-ms:3000}") int connectTimeoutMs,
+            @Value("${goodbuy.catalog.eandb.read-timeout-ms:4000}") int readTimeoutMs
+    ) {
+        requireNonBlank(baseUrl, "goodbuy.catalog.eandb.base-url is required");
+        requireNonBlank(jwt,      "goodbuy.catalog.eandb.jwt is required");
 
-        // Fail-fast validation so we don't start with a broken client
-        if (p.getBaseUrl() == null || p.getBaseUrl().isBlank()) {
-            throw new IllegalStateException("goodbuy.catalog.eansearch.base-url is required when provider=eansearch");
-        }
-        if (p.getApiKey() == null || p.getApiKey().isBlank()) {
-            throw new IllegalStateException("goodbuy.catalog.eansearch.api-key is required when provider=eansearch");
-        }
+        final int ct = clamp(connectTimeoutMs);
+        final int rt = clamp(readTimeoutMs);
 
-        // Clamp timeouts to a sane range (100ms .. 30_000ms)
-        int connectMs = Math.max(100, Math.min(p.getConnectTimeoutMs(), 30_000));
-        int readMs    = Math.max(100, Math.min(p.getReadTimeoutMs(), 30_000));
+        log.info("Catalog: provider=eandb baseUrl={} ct={}ms rt={}ms", baseUrl, ct, rt);
+        return new EanDbCatalogClient(baseUrl, jwt, ct, rt);
+    }
 
-        log.info("Catalog: registering EAN Search client (baseUrl={}, connectTimeoutMs={}, readTimeoutMs={})",
-                p.getBaseUrl(), connectMs, readMs);
-
-        return new EanSearchClient(
-                p.getBaseUrl(),
-                p.getApiKey(),
-                connectMs,
-                readMs
-        );
+    // ---- helpers ----
+    private static void requireNonBlank(String s, String msg) {
+        if (s == null || s.isBlank()) throw new IllegalStateException(msg);
+    }
+    private static int clamp(int ms) {
+        // keep within sane bounds (100ms .. 30s)
+        return Math.max(100, Math.min(ms, 30_000));
     }
 }
