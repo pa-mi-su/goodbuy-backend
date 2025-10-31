@@ -14,6 +14,12 @@
   <name>GoodBuy API</name>
   <packaging>jar</packaging>
 
+  <properties>
+    <java.version>17</java.version>
+    <!-- Your @SpringBootApplication entrypoint -->
+    <start-class>app.goodbuy.GoodBuyBackendApplication</start-class>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>app.goodbuy</groupId>
@@ -33,26 +39,32 @@
 
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <!-- Health, info, metrics endpoints -->
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
+
     <dependency>
       <groupId>org.springdoc</groupId>
       <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
       <version>2.6.0</version>
     </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
     <plugins>
+      <!-- Plugin version comes from parent (spring-boot-dependencies).
+           We still pass the main class explicitly for spring-boot:run. -->
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <mainClass>${start-class}</mainClass>
+        </configuration>
         <executions>
           <execution>
             <goals>
@@ -60,6 +72,15 @@
             </goals>
           </execution>
         </executions>
+      </plugin>
+
+      <!-- Ensure Java 17 bytecode if parent didn’t already set it globally -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <release>${java.version}</release>
+        </configuration>
       </plugin>
     </plugins>
   </build>
