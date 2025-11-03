@@ -162,16 +162,13 @@ curl -fsS http://localhost:8080/actuator/info
 ## Logging and Running
 
 •	Dev (plain logs):
-        SPRING_PROFILES_ACTIVE=dev docker compose up -d --build
-        docker compose logs -f goodbuy-api
+        SPRING_PROFILES_ACTIVE=dev docker compose up -d --build && docker compose logs -f goodbuy-api
 
 •	Prod (plain logs):
-        SPRING_PROFILES_ACTIVE=prod docker compose up -d --build
-        docker compose logs -f goodbuy-api
+        SPRING_PROFILES_ACTIVE=prod docker compose up -d --build && docker compose logs -f goodbuy-api
 
 •	Prod (JSON logs):
-        SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build
-        docker compose logs -f goodbuy-api
+        SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build && docker compose logs -f goodbuy-api
 
 ---
 
