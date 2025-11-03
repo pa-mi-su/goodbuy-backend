@@ -1,0 +1,21 @@
+# --- Logging (more chatty, readable) ---
+logging.level.root=INFO
+logging.level.org.springframework=INFO
+logging.level.app.goodbuy=DEBUG
+logging.level.app.goodbuy.catalog=DEBUG
+logging.level.app.goodbuy.catalog.eandb=DEBUG
+
+# Use the same logback-spring.xml for unified format (plain readable by default)
+logging.config=classpath:logback-spring.xml
+
+# Friendly console pattern (keeps reqId in local console)
+logging.pattern.console=%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} reqId=%X{requestId} - %msg%n
+
+# --- Actuator (fully open for local debugging) ---
+management.endpoints.web.exposure.include=*
+management.endpoint.health.show-details=always
+
+# --- CORS (wide open for simulators, tools, localhost) ---
+spring.mvc.cors.allowed-origins=*
+spring.mvc.cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS
+spring.mvc.cors.allowed-headers=*
