@@ -1,17 +1,71 @@
+# =========================
+# Build outputs
+# =========================
 /target/
 /build/
 /out/
+
+# =========================
+# Logs and temporary files
+# =========================
 *.log
+*.tmp
 *.class
 *.jar
 *.war
-*.iml
+*.ear
+
+# =========================
+# IDE and project files
+# =========================
 /.idea/
 /.vscode/
 /.settings/
 /project/
 /.classpath
 /.project
+*.iml
+
+# =========================
+# OS-specific files
+# =========================
 .DS_Store
 Thumbs.db
+
+# =========================
+# Environment & secrets
+# =========================
 .env
+.env.*
+/.secrets/
+/.secrets/*
+!/.secrets/.gitkeep  # allow placeholder if needed
+
+# =========================
+# Docker
+# =========================
+*.pid
+*.seed
+*.tar
+docker-compose.override.yml
+
+# =========================
+# Maven Wrapper
+# =========================
+.mvn/wrapper/maven-wrapper.jar
+!/.mvn/wrapper/maven-wrapper.properties
+
+# =========================
+# Node / frontend (if present)
+# =========================
+node_modules/
+dist/
+build/
+
+# =========================
+# Misc
+# =========================
+*.swp
+*.bak
+*.orig
+.secrets/
