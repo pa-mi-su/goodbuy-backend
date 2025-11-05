@@ -1,5 +1,8 @@
 package app.goodbuy.ingredients.model;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
@@ -7,13 +10,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public final class IngredientDTO {
     public Long id;
     public String canonicalKey;
     public String displayName;
     public String summary;
     public String description;
-    public String func;              // iOS: funcUse
+    public String func;              // iOS: funcUse → "func"
     public String concerns;
     public BigDecimal safetyScore;
     public String ratingLetter;
@@ -23,7 +27,9 @@ public final class IngredientDTO {
     public boolean isActive;
     public List<String> tags;        // entity: List<String>
     public List<String> aliases;     // entity: List<IngredientAlias> -> List<String>
-    public OffsetDateTime updatedAt;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ssXXX")
+    public OffsetDateTime updatedAt; // Emits ISO-8601 string, e.g. "2025-11-05T20:18:00Z"
 
     public static IngredientDTO of(Ingredient e) {
         if (e == null) return null;
@@ -44,7 +50,6 @@ public final class IngredientDTO {
         dto.isActive = e.isActive();
         dto.updatedAt = e.getUpdatedAt();
 
-        // tags: already List<String>
         dto.tags = safeList(e.getTags()).stream()
                 .filter(Objects::nonNull)
                 .map(String::trim)
@@ -52,7 +57,6 @@ public final class IngredientDTO {
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .collect(Collectors.toList());
 
-        // aliases: List<IngredientAlias> -> List<String> (alias text)
         dto.aliases = safeList(e.getAliases()).stream()
                 .filter(Objects::nonNull)
                 .map(IngredientAlias::getAlias)
