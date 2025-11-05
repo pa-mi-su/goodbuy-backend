@@ -172,6 +172,18 @@ curl -fsS http://localhost:8080/actuator/info
 
 ---
 
+
+1) Clean + rebuild the JAR (to purge the old file from the classpath)
+mvn -q -B -DskipTests clean package -pl goodbuy-api -am
+
+2) Rebuild the Docker image (no cache) and start API
+docker compose build --no-cache goodbuy-api
+docker compose up -d goodbuy-api
+
+3) Tail Logs
+docker compose logs goodbuy-api --tail=200
+
+----
 ## Stack
 
 - Spring Boot 3.3, Java 17
