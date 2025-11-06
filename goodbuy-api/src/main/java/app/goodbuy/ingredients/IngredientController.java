@@ -27,20 +27,29 @@ public class IngredientController {
         this.service = service;
     }
 
-    // GET /api/ingredients/{nameOrKey}
+    // A) GET /api/ingredients?q=Raw Name With Spaces (search form)
+    @GetMapping(params = "q")
+    public app.goodbuy.ingredients.model.IngredientDTO getOneByQuery(@RequestParam("q") String q) {
+        String query = normalize(q);
+        if (query.isEmpty()) {
+            throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
+        }
+        return service.findByNameOrAlias(query)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ingredient not found: " + query));
+    }
+
+    // B) GET /api/ingredients/{nameOrKey} (path form)
     @GetMapping("/{nameOrKey:.+}")
     public app.goodbuy.ingredients.model.IngredientDTO getOne(@PathVariable("nameOrKey") String nameOrKey) {
         String query = normalize(nameOrKey);
         if (query.isEmpty()) {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
         }
-
         return service.findByNameOrAlias(query)
-                .orElseThrow(() ->
-                        new ResponseStatusException(NOT_FOUND, "Ingredient not found: " + query));
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ingredient not found: " + query));
     }
 
-    // POST /api/ingredients/_batch   Body: ["sodium-bicarbonate","baking soda",...]
+    // POST /api/ingredients/_batch
     @PostMapping(path = "/_batch", consumes = MediaType.APPLICATION_JSON_VALUE)
     public List<app.goodbuy.ingredients.model.IngredientDTO> batch(@RequestBody List<String> names) {
         if (names == null) {
@@ -50,7 +59,7 @@ public class IngredientController {
         var cleaned = names.stream()
                 .map(this::normalize)
                 .filter(s -> !s.isEmpty())
-                .collect(Collectors.toCollection(LinkedHashSet::new)) // dedupe, preserve order
+                .collect(Collectors.toCollection(LinkedHashSet::new))
                 .stream()
                 .limit(BATCH_LIMIT)
                 .toList();
@@ -62,15 +71,23 @@ public class IngredientController {
         return service.findManyByNamesOrAliases(cleaned);
     }
 
-    // Helpers
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
     private String normalize(String raw) {
         if (raw == null) return "";
+        String s = raw.trim();
+        // decode up to twice to handle %2520 → %20 → " "
+        s = decodeOnce(s);
+        s = decodeOnce(s);           // second pass (safe no-op if not encoded)
+        s = s.replace('+', ' ');     // treat + as space if it came from query form
+        return s.trim();
+    }
+
+    private String decodeOnce(String val) {
         try {
-            // Accept percent-encoded inputs; do NOT lower-case to preserve display names.
-            String decoded = URLDecoder.decode(raw, StandardCharsets.UTF_8);
-            return decoded.trim();
-        } catch (IllegalArgumentException badEncoding) {
-            return raw.trim();
+            return URLDecoder.decode(val, StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException bad) {
+            return val;
         }
     }
 }
