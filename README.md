@@ -42,20 +42,6 @@
 
 ---
 
-## Architecture
-
-```
-iOS App (SwiftUI)
-     │  GET /v1/products/{gtin}
-     ▼
-GoodBuy Backend (Spring Boot)
-     │
-     ├─ PostgreSQL 16 (Flyway migrations)
-     └─ EAN-DB (external provider via JWT)
-```
-
----
-
 ## 🧭 System Architecture Diagram
 
 ```text
@@ -397,71 +383,81 @@ Design Philosophy
 
 ---
 
+```mermaid
 flowchart TD
 
-subgraph IOS["📱 iOS App / Frontend"]
+  %% iOS / Frontend
+  subgraph IOS["iOS App / Frontend"]
     IOSScan[Scan barcode]
-    IOSReq[GET /v1/products/{code}\nGET /v1/products/{code}/detail\nGET /api/ingredients/{key}"]
+    IOSReq[GET /v1/products/{code}\nGET /v1/products/{code}/detail\nGET /api/ingredients/{key}]
     IOSScan --> IOSReq
-end
+  end
 
-subgraph API["goodbuy-api (Spring Boot)"]
-    PC[ProductController]
-    IC[IngredientController]
+  %% API module
+  subgraph API["goodbuy-api (Spring Boot)"]
+    PC[ProductController\n/v1/products]
+    IC[IngredientController\n/api/ingredients]
     PS[ProductService]
     IRS[IngredientReadService]
     LOG[RequestLoggingFilter]
     EX[GlobalExceptionHandler]
-end
+  end
 
-subgraph CORE["goodbuy-core (Domain & Ports)"]
+  %% Core module
+  subgraph CORE["goodbuy-core (Domain & Ports)"]
     PDD[ProductDetailDto]
     IDTO[IngredientDTO]
     IRP[IngredientReadPort]
     ECC[ExternalCatalogClient]
     BN[BarcodeNormalizer]
-end
+  end
 
-subgraph ADAPT["goodbuy-adapters-catalog (External adapters)"]
-    CFG[CatalogConfig & CatalogProperties]
+  %% Adapters module
+  subgraph ADAPT["goodbuy-adapters-catalog (External adapters)"]
+    CFG[CatalogConfig &\nCatalogProperties]
     EDB[EanDbCatalogClient]
     ES[EanSearchClient]
-end
+  end
 
-subgraph DB["PostgreSQL"]
+  %% Database
+  subgraph DB["PostgreSQL"]
     IR[IngredientRepository (JPA)]
-end
+  end
 
-EXT_EANDB["EAN-DB API"]
-EXT_EANS["EAN-Search API (optional)"]
+  %% External services
+  EXT_EANDB["EAN-DB API"]
+  EXT_EANS["EAN-Search API (optional)"]
 
-IOSReq --> PC
-IOSReq --> IC
+  %% Flows
 
-PC --> PS
-IC --> IRS
+  IOSReq --> PC
+  IOSReq --> IC
 
-PS --> BN
-PS --> ECC
+  PC --> PS
+  IC --> IRS
 
-ECC -.interface-. EDB
-ECC -.interface-. ES
+  PS --> BN
+  PS --> ECC
 
-EDB --> EXT_EANDB
-ES --> EXT_EANS
+  ECC --> EDB
+  ECC --> ES
 
-EDB --> PDD
-ES --> PDD
+  EDB --> EXT_EANDB
+  ES --> EXT_EANS
 
-PS --> PDD
-PC --> IOSReq
+  EDB --> PDD
+  ES --> PDD
 
-IRS --> IRP
-IRP -.implemented by-. IR
-IR --> DB
-IRS --> IDTO
-IC --> IOSReq
+  PS --> PDD
+  PC --> IOSReq
 
+  IRS --> IRP
+  IRP --> IR
+  IR --> DB
+
+  IRS --> IDTO
+  IC --> IOSReq
+  
 ---
 ## License
 
