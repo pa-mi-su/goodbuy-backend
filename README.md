@@ -385,81 +385,61 @@ Design Philosophy
 
 ## Project Structure
 
+<details>
+<summary>Click to expand</summary>
+
+```text
 goodbuy-backend/
-├── docker-compose.yml              # Local setup (API + Postgres)
-├── pom.xml                         # Maven multi-module parent
+├─ pom.xml
+├─ docker-compose.yml
 │
-├── goodbuy-api/                    # REST API (Spring Boot application)
-│   ├── src/main/java/app/goodbuy/
-│   │   ├── GoodBuyBackendApplication.java
-│   │   ├── api/
-│   │   │   ├── RequestLoggingFilter.java
-│   │   │   ├── GlobalExceptionHandler.java
-│   │   │
-│   │   ├── products/
-│   │   │   ├── ProductController.java
-│   │   │   ├── ProductService.java
-│   │   │
-│   │   ├── ingredients/
-│   │   │   ├── IngredientController.java
-│   │   │   ├── IngredientReadService.java
-│   │   │
-│   │   └── config/
-│   │       ├── WebConfig.java
-│   │       └── AppProperties.java
-│   │
-│   └── resources/
-│       ├── application.yml
-│       └── logback-spring.xml
+├─ goodbuy-api/                  # REST API (Spring Boot)
+│  └─ src/main/java/app/goodbuy/
+│     ├─ GoodBuyBackendApplication.java
+│     ├─ api/
+│     │  ├─ RequestLoggingFilter.java
+│     │  └─ GlobalExceptionHandler.java
+│     ├─ config/
+│     │  ├─ WebConfig.java
+│     │  └─ AppProperties.java
+│     ├─ products/
+│     │  ├─ ProductController.java
+│     │  └─ ProductService.java
+│     └─ ingredients/
+│        ├─ IngredientController.java
+│        └─ IngredientReadService.java
 │
-├── goodbuy-core/                   # Domain logic (framework-agnostic)
-│   ├── src/main/java/app/goodbuy/core/
-│   │   ├── products/dto/
-│   │   │   ├── ProductDetailDto.java
-│   │   │   └── IngredientDto.java
-│   │   │
-│   │   ├── products/ports/
-│   │   │   ├── ExternalCatalogClient.java
-│   │   │   └── IngredientReadPort.java
-│   │   │
-│   │   ├── products/util/
-│   │   │   ├── BarcodeNormalizer.java
-│   │   │   └── ProductMapper.java
-│   │   │
-│   │   └── common/
-│   │       ├── SourceType.java
-│   │       └── ErrorCodes.java
+├─ goodbuy-core/                 # Domain logic + DTOs
+│  └─ src/main/java/app/goodbuy/core/
+│     ├─ products/
+│     │  ├─ dto/ProductDetailDto.java
+│     │  ├─ ports/ExternalCatalogClient.java
+│     │  └─ util/BarcodeNormalizer.java
+│     └─ ingredients/
+│        ├─ dto/IngredientDto.java
+│        └─ ports/IngredientReadPort.java
 │
-├── goodbuy-adapters-catalog/       # External API integrations
-│   ├── src/main/java/app/goodbuy/adapters/catalog/
-│   │   ├── CatalogConfig.java
-│   │   ├── CatalogProperties.java
-│   │   ├── eandb/
-│   │   │   ├── EanDbCatalogClient.java
-│   │   │   ├── EanDbProductMapper.java
-│   │   ├── eansearch/
-│   │   │   ├── EanSearchClient.java
-│   │   │   ├── EanSearchMapper.java
-│   │   └── support/
-│   │       └── HttpClientFactory.java
+├─ goodbuy-adapters-catalog/     # External APIs (EAN-DB, etc.)
+│  └─ src/main/java/app/goodbuy/adapters/catalog/
+│     ├─ CatalogConfig.java
+│     ├─ CatalogProperties.java
+│     ├─ eandb/EanDbCatalogClient.java
+│     └─ eansearch/EanSearchClient.java
 │
-├── goodbuy-adapters-core/          # Internal Postgres adapter
-│   ├── src/main/java/app/goodbuy/adapters/core/
-│   │   ├── CoreIngredientReadAdapter.java
-│   │   ├── repository/
-│   │   │   ├── IngredientRepository.java
-│   │   │   ├── AliasRepository.java
-│   │   │   └── HazardRepository.java
-│   │   └── entities/
-│   │       ├── IngredientEntity.java
-│   │       ├── AliasEntity.java
-│   │       └── HazardEntity.java
+├─ goodbuy-adapters-core/        # Postgres adapter
+│  └─ src/main/java/app/goodbuy/adapters/core/
+│     ├─ CoreIngredientReadAdapter.java
+│     ├─ repository/IngredientRepository.java
+│     └─ entities/
+│        ├─ IngredientEntity.java
+│        ├─ AliasEntity.java
+│        └─ HazardEntity.java
 │
-└── goodbuy-migrations/             # Flyway database migrations
-    └── src/main/resources/db/migration/
-        ├── V1__ingredients_init.sql
-        ├── V2__aliases_table.sql
-        └── V3__hazards_table.sql
+└─ goodbuy-migrations/           # Flyway SQL migrations
+   └─ src/main/resources/db/migration/
+      ├─ V1__ingredients_init.sql
+      ├─ V2__aliases_table.sql
+      └─ V3__hazards_table.sql
 
 ### Module Overview
 
