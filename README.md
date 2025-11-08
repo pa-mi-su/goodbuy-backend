@@ -56,6 +56,110 @@ GoodBuy Backend (Spring Boot)
 
 ---
 
+## 🧭 System Architecture Diagram
+
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│                             iOS / Frontend                          │
+│─────────────────────────────────────────────────────────────────────│
+│ - Scans barcode (e.g. 0033200011408)                                │
+│ - Calls backend: GET /v1/products/{code}                            │
+└─────────────────────────────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          goodbuy-api (Spring Boot)                  │
+│─────────────────────────────────────────────────────────────────────│
+│ 🧩 REST Controllers                                                  │
+│   • ProductController (/v1/products)                                │
+│   • IngredientController (/api/ingredients)                         │
+│                                                                     │
+│ 🧠 Services                                                          │
+│   • ProductService  → orchestrates catalog lookup                   │
+│   • IngredientReadService → orchestrates ingredient DB reads        │
+│                                                                     │
+│ 🪄 Shared Infrastructure                                             │
+│   • RequestLoggingFilter, GlobalExceptionHandler                    │
+│   • CORS & Swagger config                                           │
+└─────────────────────────────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        goodbuy-core (Domain Layer)                  │
+│─────────────────────────────────────────────────────────────────────│
+│ 🧱 DTOs & Ports (Pure Java)                                         │
+│   • ProductDetailDto, IngredientDTO                                 │
+│   • IngredientReadPort, ExternalCatalogClient                       │
+│   • BarcodeNormalizer, Enums, Util classes                          │
+│                                                                     │
+│ ❗ No Spring, no HTTP, no DB — pure data and contracts.              │
+└─────────────────────────────────────────────────────────────────────┘
+          │                                 │
+          ▼                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│             goodbuy-adapters-catalog (External Providers)           │
+│─────────────────────────────────────────────────────────────────────│
+│ 🌐 EanDbCatalogClient                                               │
+│   - Calls https://ean-db.com/api/v2/product/{gtin}                  │
+│   - Maps JSON → ProductDetailDto                                    │
+│                                                                     │
+│ 🌐 EanSearchClient (optional fallback)                              │
+│   - Alternative provider (https://api.ean-search.org)               │
+│                                                                     │
+│ ⚙️ CatalogConfig / CatalogProperties                                │
+│   - Chooses which provider to activate                              │
+│   - Handles timeouts, API keys, etc.                                │
+└─────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Postgres Database                           │
+│─────────────────────────────────────────────────────────────────────│
+│ 🧬 IngredientRepository (JPA)                                       │
+│   - Reads ingredient data                                           │
+│   - Used by CoreIngredientReadAdapter                               │
+│                                                                     │
+│ 🧬 Tables: ingredients, aliases, hazards, tags, etc.                │
+└─────────────────────────────────────────────────────────────────────┘
+
+iOS → ProductController → ProductService → EanDbCatalogClient → EAN-DB API → JSON mapped to ProductDetailDto → returned to iOS
+
+iOS → IngredientController → IngredientReadService → CoreIngredientReadAdapter → IngredientRepository (Postgres) → IngredientDTO → returned to iOS
+
+🔄 End-to-End Request Flow
+
+1️⃣ Product Lookup
+	1.	iOS app scans a barcode and calls:
+
+GET /v1/products/0033200011408
+
+	2.	ProductController validates and normalizes the code → GTIN-14.
+	3.	ProductService asks ExternalCatalogClient (e.g., EanDbCatalogClient) for details.
+	4.	EanDbCatalogClient calls EAN-DB, maps the JSON response → ProductDetailDto.
+	5.	The result is wrapped into a ProductView or returned directly for /detail.
+	6.	Response sent back to iOS:
+
+{
+  "gtin": "0033200011408",
+  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
+  "brand": "Arm & Hammer",
+  "category": "Baking Soda",
+  "images": [...],
+  "ingredients": [...],
+  "source": "EAN-DB"
+}
+
+2️⃣ Ingredient Detail Lookup
+	1.	Client requests:
+
+GET /api/ingredients/sodium-bicarbonate
+
+	2.	IngredientController → IngredientReadService → IngredientReadPort.
+	3.	CoreIngredientReadAdapter queries Postgres (IngredientRepository).
+	4.	Result mapped → IngredientDTO and returned as JSON.
+
+---
+
 ## Project Structure
 
 ```
@@ -76,7 +180,7 @@ goodbuy-backend/
 └── README.md
 ```
 
-> **Note:** All credentials and JWTs live in `.env` and `.secrets/app-secrets.properties`. These files are private and excluded via `.gitignore`.
+> **Note:** All credentials and JWTs live in `.secrets/app-secrets.properties` and `.secrets/db-secrets.properties`. These files are private and excluded via `.gitignore`.
 
 ---
 
@@ -293,6 +397,72 @@ Design Philosophy
 
 ---
 
+flowchart TD
+
+subgraph IOS["📱 iOS App / Frontend"]
+    IOSScan[Scan barcode]
+    IOSReq[GET /v1/products/{code}\nGET /v1/products/{code}/detail\nGET /api/ingredients/{key}"]
+    IOSScan --> IOSReq
+end
+
+subgraph API["goodbuy-api (Spring Boot)"]
+    PC[ProductController]
+    IC[IngredientController]
+    PS[ProductService]
+    IRS[IngredientReadService]
+    LOG[RequestLoggingFilter]
+    EX[GlobalExceptionHandler]
+end
+
+subgraph CORE["goodbuy-core (Domain & Ports)"]
+    PDD[ProductDetailDto]
+    IDTO[IngredientDTO]
+    IRP[IngredientReadPort]
+    ECC[ExternalCatalogClient]
+    BN[BarcodeNormalizer]
+end
+
+subgraph ADAPT["goodbuy-adapters-catalog (External adapters)"]
+    CFG[CatalogConfig & CatalogProperties]
+    EDB[EanDbCatalogClient]
+    ES[EanSearchClient]
+end
+
+subgraph DB["PostgreSQL"]
+    IR[IngredientRepository (JPA)]
+end
+
+EXT_EANDB["EAN-DB API"]
+EXT_EANS["EAN-Search API (optional)"]
+
+IOSReq --> PC
+IOSReq --> IC
+
+PC --> PS
+IC --> IRS
+
+PS --> BN
+PS --> ECC
+
+ECC -.interface-. EDB
+ECC -.interface-. ES
+
+EDB --> EXT_EANDB
+ES --> EXT_EANS
+
+EDB --> PDD
+ES --> PDD
+
+PS --> PDD
+PC --> IOSReq
+
+IRS --> IRP
+IRP -.implemented by-. IR
+IR --> DB
+IRS --> IDTO
+IC --> IOSReq
+
+---
 ## License
 
 © 2025 GoodBuy. All rights reserved.
