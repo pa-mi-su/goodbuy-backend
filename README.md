@@ -14,17 +14,9 @@
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
-- [Getting Started (Local, Docker)](#getting-started-local-docker)
-  - [1) Create private configuration](#1-create-private-configuration)
-  - [2) Build & run with Docker Compose](#2-build--run-with-docker-compose)
-  - [3) Verify health & docs](#3-verify-health--docs)
-  - [4) Connect with a SQL client (optional)](#4-connect-with-a-sql-client-optional)
-- [Spring Profiles](#spring-profiles)
-- [Environment & Secrets](#environment--secrets)
-- [API Usage](#api-usage)
-- [Logging](#logging)
-- [Troubleshooting](#troubleshooting)
-- [For Recruiters](#for-recruiters)
+- [Getting Started](#getting-started)
+- [Product API Endpoints](#product-api-endpoints)
+- [Tech Stack](#tech-stack)
 - [License](#license)
 
 ---
@@ -297,15 +289,6 @@ docker compose up -d goodbuy-api
 3) Tail Logs
 docker compose logs goodbuy-api --tail=200
 
-----
-## Stack
-
-- Spring Boot 3.3, Java 17
-- Dockerized Postgres + Flyway migrations
-- Modular POM, OpenAPI docs
-- Ready for multi-service expansion
-- Clean CI/CD readiness for AWS or bare EC2
-
 ---
 
 🧭 Product API Endpoints Overview
@@ -407,21 +390,21 @@ Design Philosophy
 
 ---
 
+### 🛠 Tech Stack
 
-
-### Module Overview
-
-The project follows a modular, hexagonal architecture.
-- **goodbuy-api** – The main Spring Boot application. It exposes REST endpoints (`/v1/products` and `/api/ingredients`), handles requests from the iOS app, and delegates logic to services.
-- **goodbuy-core** – The core domain layer, containing DTOs, utility classes, and “ports” (interfaces) that define how other modules should communicate with external systems or databases. This layer has no Spring dependencies.
-- **goodbuy-adapters-catalog** – Implements the external catalog integrations. Each adapter (like `EanDbCatalogClient`) connects to third-party product data providers such as EAN-DB or EAN-Search.
-- **goodbuy-adapters-core** – Implements internal adapters for the application’s own PostgreSQL database. It provides JPA repositories and entity mappings to persist and query ingredients, aliases, and hazards.
-- **goodbuy-migrations** – Contains Flyway SQL migration scripts that build and evolve the database schema.
-
-Together, these modules form a clean separation between API, business logic, external integrations, and database access — making the system easier to test, maintain, and extend.
-
+| Layer | Technology |
+|--------|-------------|
+| Language | Java 17 |
+| Framework | Spring Boot 3.3.x |
+| Database | PostgreSQL 16 |
+| Migrations | Flyway |
+| Containerization | Docker / Docker Compose |
+| API Docs | OpenAPI / Swagger |
+| Logging | JSON + Request ID correlation |
+| Architecture | Modular Hexagonal (Ports & Adapters) |
 
 ---
+
 ## License
 
 © 2025 GoodBuy. All rights reserved.
