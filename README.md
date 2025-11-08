@@ -383,81 +383,96 @@ Design Philosophy
 
 ---
 
-```mermaid
-flowchart TD
+## Project Structure
 
-  %% iOS / Frontend
-  subgraph IOS["iOS App / Frontend"]
-    IOSScan[Scan barcode]
-    IOSReq[GET /v1/products/{code}\nGET /v1/products/{code}/detail\nGET /api/ingredients/{key}]
-    IOSScan --> IOSReq
-  end
+goodbuy-backend/
+├── docker-compose.yml              # Local setup (API + Postgres)
+├── pom.xml                         # Maven multi-module parent
+│
+├── goodbuy-api/                    # REST API (Spring Boot application)
+│   ├── src/main/java/app/goodbuy/
+│   │   ├── GoodBuyBackendApplication.java
+│   │   ├── api/
+│   │   │   ├── RequestLoggingFilter.java
+│   │   │   ├── GlobalExceptionHandler.java
+│   │   │
+│   │   ├── products/
+│   │   │   ├── ProductController.java
+│   │   │   ├── ProductService.java
+│   │   │
+│   │   ├── ingredients/
+│   │   │   ├── IngredientController.java
+│   │   │   ├── IngredientReadService.java
+│   │   │
+│   │   └── config/
+│   │       ├── WebConfig.java
+│   │       └── AppProperties.java
+│   │
+│   └── resources/
+│       ├── application.yml
+│       └── logback-spring.xml
+│
+├── goodbuy-core/                   # Domain logic (framework-agnostic)
+│   ├── src/main/java/app/goodbuy/core/
+│   │   ├── products/dto/
+│   │   │   ├── ProductDetailDto.java
+│   │   │   └── IngredientDto.java
+│   │   │
+│   │   ├── products/ports/
+│   │   │   ├── ExternalCatalogClient.java
+│   │   │   └── IngredientReadPort.java
+│   │   │
+│   │   ├── products/util/
+│   │   │   ├── BarcodeNormalizer.java
+│   │   │   └── ProductMapper.java
+│   │   │
+│   │   └── common/
+│   │       ├── SourceType.java
+│   │       └── ErrorCodes.java
+│
+├── goodbuy-adapters-catalog/       # External API integrations
+│   ├── src/main/java/app/goodbuy/adapters/catalog/
+│   │   ├── CatalogConfig.java
+│   │   ├── CatalogProperties.java
+│   │   ├── eandb/
+│   │   │   ├── EanDbCatalogClient.java
+│   │   │   ├── EanDbProductMapper.java
+│   │   ├── eansearch/
+│   │   │   ├── EanSearchClient.java
+│   │   │   ├── EanSearchMapper.java
+│   │   └── support/
+│   │       └── HttpClientFactory.java
+│
+├── goodbuy-adapters-core/          # Internal Postgres adapter
+│   ├── src/main/java/app/goodbuy/adapters/core/
+│   │   ├── CoreIngredientReadAdapter.java
+│   │   ├── repository/
+│   │   │   ├── IngredientRepository.java
+│   │   │   ├── AliasRepository.java
+│   │   │   └── HazardRepository.java
+│   │   └── entities/
+│   │       ├── IngredientEntity.java
+│   │       ├── AliasEntity.java
+│   │       └── HazardEntity.java
+│
+└── goodbuy-migrations/             # Flyway database migrations
+    └── src/main/resources/db/migration/
+        ├── V1__ingredients_init.sql
+        ├── V2__aliases_table.sql
+        └── V3__hazards_table.sql
 
-  %% API module
-  subgraph API["goodbuy-api (Spring Boot)"]
-    PC[ProductController\n/v1/products]
-    IC[IngredientController\n/api/ingredients]
-    PS[ProductService]
-    IRS[IngredientReadService]
-    LOG[RequestLoggingFilter]
-    EX[GlobalExceptionHandler]
-  end
+### Module Overview
 
-  %% Core module
-  subgraph CORE["goodbuy-core (Domain & Ports)"]
-    PDD[ProductDetailDto]
-    IDTO[IngredientDTO]
-    IRP[IngredientReadPort]
-    ECC[ExternalCatalogClient]
-    BN[BarcodeNormalizer]
-  end
+The project follows a modular, hexagonal architecture.
+- **goodbuy-api** – The main Spring Boot application. It exposes REST endpoints (`/v1/products` and `/api/ingredients`), handles requests from the iOS app, and delegates logic to services.
+- **goodbuy-core** – The core domain layer, containing DTOs, utility classes, and “ports” (interfaces) that define how other modules should communicate with external systems or databases. This layer has no Spring dependencies.
+- **goodbuy-adapters-catalog** – Implements the external catalog integrations. Each adapter (like `EanDbCatalogClient`) connects to third-party product data providers such as EAN-DB or EAN-Search.
+- **goodbuy-adapters-core** – Implements internal adapters for the application’s own PostgreSQL database. It provides JPA repositories and entity mappings to persist and query ingredients, aliases, and hazards.
+- **goodbuy-migrations** – Contains Flyway SQL migration scripts that build and evolve the database schema.
 
-  %% Adapters module
-  subgraph ADAPT["goodbuy-adapters-catalog (External adapters)"]
-    CFG[CatalogConfig &\nCatalogProperties]
-    EDB[EanDbCatalogClient]
-    ES[EanSearchClient]
-  end
+Together, these modules form a clean separation between API, business logic, external integrations, and database access — making the system easier to test, maintain, and extend.
 
-  %% Database
-  subgraph DB["PostgreSQL"]
-    IR[IngredientRepository (JPA)]
-  end
 
-  %% External services
-  EXT_EANDB["EAN-DB API"]
-  EXT_EANS["EAN-Search API (optional)"]
-
-  %% Flows
-
-  IOSReq --> PC
-  IOSReq --> IC
-
-  PC --> PS
-  IC --> IRS
-
-  PS --> BN
-  PS --> ECC
-
-  ECC --> EDB
-  ECC --> ES
-
-  EDB --> EXT_EANDB
-  ES --> EXT_EANS
-
-  EDB --> PDD
-  ES --> PDD
-
-  PS --> PDD
-  PC --> IOSReq
-
-  IRS --> IRP
-  IRP --> IR
-  IR --> DB
-
-  IRS --> IDTO
-  IC --> IOSReq
-  
 ---
 ## License
 
