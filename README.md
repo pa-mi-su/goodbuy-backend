@@ -148,104 +148,128 @@ GET /api/ingredients/sodium-bicarbonate
 
 ## Project Structure
 
-```
+```text
 goodbuy-backend/
-├── goodbuy-api/
-│   ├── src/main/java/app/goodbuy/...
-│   ├── src/main/resources/
-│   │   ├── application.properties
-│   │   ├── application-dev.properties
-│   │   ├── application-prod.properties
-│   │   └── db/migration/
-│   ├── Dockerfile
-│   └── pom.xml
-├── docker-compose.yml
-├── .secrets/
-│   └── app-secrets.properties
-├── .env
-└── README.md
-```
+├─ pom.xml
+├─ docker-compose.yml
+│
+├─ goodbuy-api/                  # REST API (Spring Boot)
+│  └─ src/main/java/app/goodbuy/
+│     ├─ GoodBuyBackendApplication.java
+│     ├─ api/
+│     │  ├─ RequestLoggingFilter.java
+│     │  └─ GlobalExceptionHandler.java
+│     ├─ config/
+│     │  ├─ WebConfig.java
+│     │  └─ AppProperties.java
+│     ├─ products/
+│     │  ├─ ProductController.java
+│     │  └─ ProductService.java
+│     └─ ingredients/
+│        ├─ IngredientController.java
+│        └─ IngredientReadService.java
+│
+├─ goodbuy-core/                 # Domain logic + DTOs
+│  └─ src/main/java/app/goodbuy/core/
+│     ├─ products/
+│     │  ├─ dto/ProductDetailDto.java
+│     │  ├─ ports/ExternalCatalogClient.java
+│     │  └─ util/BarcodeNormalizer.java
+│     └─ ingredients/
+│        ├─ dto/IngredientDto.java
+│        └─ ports/IngredientReadPort.java
+│
+├─ goodbuy-adapters-catalog/     # External APIs (EAN-DB, etc.)
+│  └─ src/main/java/app/goodbuy/adapters/catalog/
+│     ├─ CatalogConfig.java
+│     ├─ CatalogProperties.java
+│     ├─ eandb/EanDbCatalogClient.java
+│     └─ eansearch/EanSearchClient.java
+│
+├─ goodbuy-adapters-core/        # Postgres adapter
+│  └─ src/main/java/app/goodbuy/adapters/core/
+│     ├─ CoreIngredientReadAdapter.java
+│     ├─ repository/IngredientRepository.java
+│     └─ entities/
+│        ├─ IngredientEntity.java
+│        ├─ AliasEntity.java
+│        └─ HazardEntity.java
+│
+└─ goodbuy-migrations/           # Flyway SQL migrations
+   └─ src/main/resources/db/migration/
+      ├─ V1__ingredients_init.sql
+      ├─ V2__aliases_table.sql
+      └─ V3__hazards_table.sql
 
-> **Note:** All credentials and JWTs live in `.secrets/app-secrets.properties` and `.secrets/db-secrets.properties`. These files are private and excluded via `.gitignore`.
+### 🧩 Module Overview
+
+The project is built using a **modular, hexagonal architecture** that keeps the API, business logic, and integrations cleanly separated.
+
+| Module | Description |
+|--------|--------------|
+| **goodbuy-api** | The main **Spring Boot application**. Exposes REST endpoints (`/v1/products`, `/api/ingredients`), handles requests from the iOS app, and delegates logic to the core services. |
+| **goodbuy-core** | The **domain layer**, containing DTOs, utility classes, and *ports* (interfaces) that define communication boundaries. This layer is framework-agnostic (no Spring dependencies). |
+| **goodbuy-adapters-catalog** | Implements **external catalog integrations** (e.g., `EanDbCatalogClient`, `EanSearchClient`) for fetching product and ingredient data from third-party APIs. |
+| **goodbuy-adapters-core** | Provides **internal persistence adapters** for PostgreSQL — JPA repositories, entity mappings, and database read/write logic for ingredients, aliases, and hazards. |
+| **goodbuy-migrations** | Contains **Flyway SQL migrations** that create and evolve the database schema across environments. |
+
+**In short:**
+The architecture enforces a clean separation between layers —
+- the API layer (what the world sees),
+- the core domain (business rules and contracts),
+- the adapters (how we connect to the outside world),
+- and the database (persistent state).
+
+This design makes the system **scalable, testable, and easy to maintain**.
+
+### 📡 Request Flow (End-to-End)
+
+Below is a high-level walkthrough of how a typical request (like scanning a barcode in the iOS app) moves through the system:
+
+1. **iOS App**
+   - The user scans a barcode.
+   - The app sends a `GET /v1/products/{code}` request to the backend API.
+
+2. **goodbuy-api (Spring Boot)**
+   - `ProductController` receives the request and normalizes the barcode.
+   - It calls `ProductService`, which decides where to fetch the data from:
+     - External catalog (EAN-DB / EAN-Search)
+     - Internal database (if product or ingredient data is already cached)
+
+3. **goodbuy-core (Domain Layer)**
+   - Defines interfaces (ports) that describe what data the API *needs*, not *how* to get it.
+   - `ExternalCatalogClient` and `IngredientReadPort` are the core contracts used by the API layer.
+
+4. **goodbuy-adapters-catalog**
+   - Implements `ExternalCatalogClient` via real integrations:
+     - `EanDbCatalogClient` → connects to [EAN-DB API](https://ean-db.com)
+     - (Optional) `EanSearchClient` → fallback lookup source
+   - These adapters transform external JSON responses into internal DTOs (`ProductDetailDto`).
+
+5. **goodbuy-adapters-core**
+   - Implements `IngredientReadPort` using `CoreIngredientReadAdapter`.
+   - Uses JPA repositories (`IngredientRepository`, `AliasRepository`, etc.) to query or persist data in PostgreSQL.
+
+6. **goodbuy-migrations**
+   - Provides versioned Flyway scripts that define and evolve the PostgreSQL schema.
+   - Ensures that all environments (dev, staging, prod) stay in sync.
+
+7. **Response**
+   - The controller combines product data + ingredient metadata into a JSON payload.
+   - It returns it to the iOS app, where the user sees:
+     - Product name, brand, image(s)
+     - Ingredient list with clickable links
+     - Safety score and hazard tags (if available)
 
 ---
 
-## Getting Started (Local, Docker)
-
-### 1) Create private configuration
-
-**.env**
-
-```dotenv
-POSTGRES_DB=bpdb
-POSTGRES_USER=bpuser
-POSTGRES_PASSWORD=replace-with-strong-password
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-HOST_PORT_POSTGRES=5433
-DB_URL=jdbc:postgresql://postgres:5432/bpdb
-DB_URL_HOST=jdbc:postgresql://localhost:5433/bpdb
-```
-
-**.secrets/app-secrets.properties**
-
-```properties
-goodbuy.catalog.enabled=true
-goodbuy.catalog.eandb.jwt=REPLACE_WITH_REAL_LONG_JWT_TOKEN
-```
-
-### 2) Build & run with Docker Compose
-
-```bash
-docker compose up -d --build postgres
-docker compose up -d --build goodbuy-api
-```
-
-### 3) Verify health & docs
-
-```bash
-curl -fsS http://localhost:8080/actuator/health && echo
-curl -fsS http://localhost:8080/actuator/info && echo
-curl -fsS http://localhost:8080/v3/api-docs | head -c 400 && echo
-```
-
-### 4) Connect with SQL client (optional)
-
-**DBeaver / psql connection:**
-Host: `localhost`
-Port: `5433`
-DB: `bpdb`
-User: `bpuser`
-Pass: `replace-with-strong-password`
-
----
-
-## Spring Profiles
-
-```yaml
-environment:
-  SPRING_PROFILES_ACTIVE: dev   # or prod
-```
-
-Or via CLI:
-
-```bash
-java -jar app.jar --spring.profiles.active=prod
-```
-
----
-
-## API Usage
-
-```bash
-curl -fsS "http://localhost:8080/v1/products/0808124111042" | jq .
-```
-
-**Health / Info:**
-```bash
-curl -fsS http://localhost:8080/actuator/health
-curl -fsS http://localhost:8080/actuator/info
-```
+**Summary:**
+> 🧠 *Each layer has one clear job.*
+> - The API talks to the Core (never directly to adapters).
+> - The Core defines what it needs, not where it comes from.
+> - The Adapters plug in real implementations (APIs, databases).
+>
+> This ensures **loose coupling**, **clean testing**, and **easy future integrations** (e.g., adding new product sources or AI-driven ingredient ratings).
 
 ---
 
@@ -383,60 +407,7 @@ Design Philosophy
 
 ---
 
-## Project Structure
 
-```text
-goodbuy-backend/
-├─ pom.xml
-├─ docker-compose.yml
-│
-├─ goodbuy-api/                  # REST API (Spring Boot)
-│  └─ src/main/java/app/goodbuy/
-│     ├─ GoodBuyBackendApplication.java
-│     ├─ api/
-│     │  ├─ RequestLoggingFilter.java
-│     │  └─ GlobalExceptionHandler.java
-│     ├─ config/
-│     │  ├─ WebConfig.java
-│     │  └─ AppProperties.java
-│     ├─ products/
-│     │  ├─ ProductController.java
-│     │  └─ ProductService.java
-│     └─ ingredients/
-│        ├─ IngredientController.java
-│        └─ IngredientReadService.java
-│
-├─ goodbuy-core/                 # Domain logic + DTOs
-│  └─ src/main/java/app/goodbuy/core/
-│     ├─ products/
-│     │  ├─ dto/ProductDetailDto.java
-│     │  ├─ ports/ExternalCatalogClient.java
-│     │  └─ util/BarcodeNormalizer.java
-│     └─ ingredients/
-│        ├─ dto/IngredientDto.java
-│        └─ ports/IngredientReadPort.java
-│
-├─ goodbuy-adapters-catalog/     # External APIs (EAN-DB, etc.)
-│  └─ src/main/java/app/goodbuy/adapters/catalog/
-│     ├─ CatalogConfig.java
-│     ├─ CatalogProperties.java
-│     ├─ eandb/EanDbCatalogClient.java
-│     └─ eansearch/EanSearchClient.java
-│
-├─ goodbuy-adapters-core/        # Postgres adapter
-│  └─ src/main/java/app/goodbuy/adapters/core/
-│     ├─ CoreIngredientReadAdapter.java
-│     ├─ repository/IngredientRepository.java
-│     └─ entities/
-│        ├─ IngredientEntity.java
-│        ├─ AliasEntity.java
-│        └─ HazardEntity.java
-│
-└─ goodbuy-migrations/           # Flyway SQL migrations
-   └─ src/main/resources/db/migration/
-      ├─ V1__ingredients_init.sql
-      ├─ V2__aliases_table.sql
-      └─ V3__hazards_table.sql
 
 ### Module Overview
 
