@@ -1,4 +1,4 @@
-package app.goodbuy.catalog;
+package app.goodbuy.adapters.catalog;
 
 /**
  * Wraps transport-layer failures when calling external catalogs

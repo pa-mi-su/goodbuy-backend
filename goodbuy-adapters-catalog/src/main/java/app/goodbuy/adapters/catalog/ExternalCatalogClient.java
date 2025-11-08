@@ -1,6 +1,6 @@
-package app.goodbuy.catalog;
+package app.goodbuy.adapters.catalog;
 
-import app.goodbuy.products.ProductDto;
+import app.goodbuy.core.products.dto.ProductDetailDto;
 
 import java.util.Optional;
 
@@ -15,5 +15,5 @@ public interface ExternalCatalogClient {
      * @return Optional with ProductDto if found, otherwise empty.
      * @throws CatalogTransportException for HTTP/timeouts/decoding issues.
      */
-    Optional<ProductDto> findByGtin(String gtin14) throws CatalogTransportException;
+    Optional<ProductDetailDto> findByGtin(String gtin14) throws CatalogTransportException;
 }

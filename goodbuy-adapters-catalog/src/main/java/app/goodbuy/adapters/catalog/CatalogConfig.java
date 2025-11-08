@@ -1,6 +1,6 @@
-package app.goodbuy.catalog;
+package app.goodbuy.adapters.catalog;
 
-import app.goodbuy.catalog.eandb.EanDbCatalogClient;
+import app.goodbuy.adapters.catalog.eandb.EanDbCatalogClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

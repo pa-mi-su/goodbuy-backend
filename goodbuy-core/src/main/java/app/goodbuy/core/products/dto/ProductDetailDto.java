@@ -1,4 +1,4 @@
-package app.goodbuy.products;
+package app.goodbuy.core.products.dto;
 
 import java.util.List;
 import java.util.Map;

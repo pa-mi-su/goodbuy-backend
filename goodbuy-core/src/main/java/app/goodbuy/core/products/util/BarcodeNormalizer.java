@@ -1,4 +1,4 @@
-package app.goodbuy.products;
+package app.goodbuy.core.products.util;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;

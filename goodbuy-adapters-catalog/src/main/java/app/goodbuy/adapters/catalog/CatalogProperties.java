@@ -1,4 +1,4 @@
-package app.goodbuy.catalog;
+package app.goodbuy.adapters.catalog;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

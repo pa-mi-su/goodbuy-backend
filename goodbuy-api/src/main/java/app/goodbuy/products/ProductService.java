@@ -1,22 +1,25 @@
 package app.goodbuy.products;
 
-import app.goodbuy.catalog.CatalogTransportException;
-import app.goodbuy.catalog.ExternalCatalogClient;
-import app.goodbuy.catalog.eandb.EanDbCatalogClient;
+import app.goodbuy.adapters.catalog.CatalogTransportException;
+import app.goodbuy.adapters.catalog.ExternalCatalogClient;
+import app.goodbuy.adapters.catalog.eandb.EanDbCatalogClient;
+import app.goodbuy.core.products.dto.ProductDetailDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.*;
+import java.util.Optional;
 
 @Service
 public class ProductService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductService.class);
 
-    /** Present only when goodbuy.catalog.enabled=true and a provider is configured. */
+    /**
+     * Present only when goodbuy.catalog.enabled=true and a provider bean is configured.
+     */
     private final Optional<ExternalCatalogClient> external;
 
     public ProductService(Optional<ExternalCatalogClient> external) {
@@ -36,35 +39,41 @@ public class ProductService {
                 .orElse("internal");
     }
 
-    /** Look up a product by GTIN-14. Returns null when not found. (simple view) */
-    public ProductDto getByGtinOrNull(String gtin14) {
-        final String code = (gtin14 == null) ? null : gtin14.trim();
+    /**
+     * Simple lookup by GTIN-14.
+     * Uses the configured ExternalCatalogClient.findByGtin(...) which now returns ProductDetailDto.
+     * Returns null when not found or on transport error.
+     */
+    public ProductDetailDto getByGtinOrNull(String gtin14) {
+        String code = gtin14 == null ? null : gtin14.trim();
         if (code == null || code.isEmpty()) return null;
-
-        if (external.isPresent()) {
-            return fetchSimpleFromExternalOrNull(code);
-        }
-        return null;
+        return fetchFromExternalOrNull(code);
     }
 
-    /** NEW: rich detail for iOS detail screen. Returns null when not found. */
+    /**
+     * Rich detail lookup for iOS detail screen.
+     * - If EanDbCatalogClient is wired, uses its findDetailByGtin(...) for full data.
+     * - Otherwise falls back to ExternalCatalogClient.findByGtin(...).
+     * Returns null when not found or on transport error.
+     */
     public ProductDetailDto getDetailByGtinOrNull(String gtin14) {
-        final String code = (gtin14 == null) ? null : gtin14.trim();
+        String code = gtin14 == null ? null : gtin14.trim();
         if (code == null || code.isEmpty()) return null;
 
-        final ExternalCatalogClient client = external.orElse(null);
-        final String provider = activeSourceName();
-        final Instant t0 = Instant.now();
-
+        ExternalCatalogClient client = external.orElse(null);
         if (client == null) return null;
 
+        String provider = activeSourceName();
+        Instant t0 = Instant.now();
+
         try {
-            // If the wired client is EAN-DB, use its rich method.
+            // Prefer rich method when using EAN-DB
             if (client instanceof EanDbCatalogClient eandb) {
-                var opt = eandb.findDetailByGtin(code);
+                Optional<ProductDetailDto> opt = eandb.findByGtin(code);
                 long ms = Duration.between(t0, Instant.now()).toMillis();
+
                 if (opt.isPresent()) {
-                    var dto = opt.get();
+                    ProductDetailDto dto = opt.get();
                     log.info("catalog detail hit provider={} gtin14={} name={} brand={} durMs={}",
                             provider, code, safe(dto.name()), safe(dto.brand()), ms);
                     return dto;
@@ -74,43 +83,19 @@ public class ProductService {
                 }
             }
 
-            // Fallback: if some other client is wired, map the simple ProductDto → ProductDetailDto.
-            var simpleOpt = client.findByGtin(code);
+            // Generic clients: rely on their findByGtin already returning ProductDetailDto
+            Optional<ProductDetailDto> opt = client.findByGtin(code);
             long ms = Duration.between(t0, Instant.now()).toMillis();
-            if (simpleOpt.isEmpty()) {
-                log.warn("catalog detail miss (simple-fallback) provider={} gtin14={} durMs={}", provider, code, ms);
+
+            if (opt.isPresent()) {
+                ProductDetailDto dto = opt.get();
+                log.info("catalog detail(generic) hit provider={} gtin14={} name={} brand={} durMs={}",
+                        provider, code, safe(dto.name()), safe(dto.brand()), ms);
+                return dto;
+            } else {
+                log.warn("catalog detail(generic) miss provider={} gtin14={} durMs={}", provider, code, ms);
                 return null;
             }
-            var s = simpleOpt.get();
-            var images = new ArrayList<ProductDetailDto.ImageDto>();
-            for (String url : s.images()) images.add(new ProductDetailDto.ImageDto(url, null, null));
-
-            var ingredients = new ArrayList<ProductDetailDto.IngredientDto>();
-            for (String name : s.ingredients()) {
-                ingredients.add(new ProductDetailDto.IngredientDto(
-                        null,              // id
-                        name,              // original
-                        null,              // canonical
-                        null,              // externalIds
-                        null,              // isVegan
-                        null               // isVegetarian
-                ));
-            }
-
-            var out = new ProductDetailDto(
-                    s.gtin(),
-                    s.name(),
-                    s.brand(),
-                    s.category(),
-                    null,                 // description (unknown in simple)
-                    images,
-                    ingredients,
-                    null,                 // titles
-                    null,                 // manufacturer
-                    provider
-            );
-            log.info("catalog detail synthesized provider={} gtin14={} durMs={}", provider, code, ms);
-            return out;
 
         } catch (CatalogTransportException e) {
             long ms = Duration.between(t0, Instant.now()).toMillis();
@@ -125,20 +110,21 @@ public class ProductService {
         }
     }
 
-    // ── internal helpers ─────────────────────────────────────────────────────────
+    // ── internal helper ────────────────────────────────────────────────────────
 
-    private ProductDto fetchSimpleFromExternalOrNull(String gtin14) {
-        final ExternalCatalogClient client = external.orElse(null);
+    private ProductDetailDto fetchFromExternalOrNull(String gtin14) {
+        ExternalCatalogClient client = external.orElse(null);
         if (client == null) return null;
 
-        final String provider = activeSourceName();
-        final Instant t0 = Instant.now();
+        String provider = activeSourceName();
+        Instant t0 = Instant.now();
+
         try {
-            var found = client.findByGtin(gtin14);
+            Optional<ProductDetailDto> found = client.findByGtin(gtin14);
             long ms = Duration.between(t0, Instant.now()).toMillis();
 
             if (found.isPresent()) {
-                var dto = found.get();
+                ProductDetailDto dto = found.get();
                 log.info("catalog hit provider={} gtin14={} name={} brand={} durMs={}",
                         provider, gtin14, safe(dto.name()), safe(dto.brand()), ms);
                 return dto;
@@ -146,6 +132,7 @@ public class ProductService {
                 log.warn("catalog miss provider={} gtin14={} durMs={}", provider, gtin14, ms);
                 return null;
             }
+
         } catch (CatalogTransportException e) {
             long ms = Duration.between(t0, Instant.now()).toMillis();
             log.warn("catalog error provider={} gtin14={} durMs={} msg={}",
@@ -159,5 +146,7 @@ public class ProductService {
         }
     }
 
-    private static String safe(String s) { return (s == null || s.isBlank()) ? "-" : s; }
+    private static String safe(String s) {
+        return (s == null || s.isBlank()) ? "-" : s;
+    }
 }

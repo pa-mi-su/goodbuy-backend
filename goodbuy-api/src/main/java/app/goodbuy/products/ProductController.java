@@ -1,5 +1,6 @@
 package app.goodbuy.products;
 
+import app.goodbuy.core.products.dto.ProductDetailDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.CacheControl;
@@ -7,7 +8,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
@@ -31,13 +35,11 @@ public class ProductController {
             String name,
             String brand,
             String category,
-            List<String> images,
-            List<String> ingredients,
-            List<String> claims,
-            List<String> hazards,
+            List<ProductDetailDto.ImageDto> images,
+            List<ProductDetailDto.IngredientDto> ingredients,
             String source
     ) {
-        static ProductView of(ProductDto dto, String source) {
+        static ProductView of(ProductDetailDto dto, String source) {
             return new ProductView(
                     dto.gtin(),
                     dto.name(),
@@ -45,8 +47,6 @@ public class ProductController {
                     dto.category(),
                     dto.images(),
                     dto.ingredients(),
-                    dto.claims(),
-                    dto.hazards(),
                     source
             );
         }
@@ -64,7 +64,7 @@ public class ProductController {
             return buildError(HttpStatus.UNPROCESSABLE_ENTITY, "invalid_barcode", e.getReason(), source);
         }
 
-        ProductDto dto = service.getByGtinOrNull(gtin14);
+        ProductDetailDto dto = service.getByGtinOrNull(gtin14);
         if (dto == null) {
             log.warn("product not found gtin14={} source={}", gtin14, source);
             return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);

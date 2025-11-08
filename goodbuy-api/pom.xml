@@ -84,6 +84,12 @@
       <artifactId>logstash-logback-encoder</artifactId>
       <version>7.4</version>
     </dependency>
+    <dependency>
+      <groupId>app.goodbuy</groupId>
+      <artifactId>goodbuy-adapters-catalog</artifactId>
+      <version>0.1.0</version>
+      <scope>compile</scope>
+    </dependency>
   </dependencies>
 
   <build>

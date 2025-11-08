@@ -1,5 +1,5 @@
 package app.goodbuy.ingredients;
-
+import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -29,7 +29,7 @@ public class IngredientController {
 
     // A) GET /api/ingredients?q=Raw Name With Spaces (search form)
     @GetMapping(params = "q")
-    public app.goodbuy.ingredients.model.IngredientDTO getOneByQuery(@RequestParam("q") String q) {
+    public IngredientDTO getOneByQuery(@RequestParam("q") String q) {
         String query = normalize(q);
         if (query.isEmpty()) {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
@@ -40,7 +40,7 @@ public class IngredientController {
 
     // B) GET /api/ingredients/{nameOrKey} (path form)
     @GetMapping("/{nameOrKey:.+}")
-    public app.goodbuy.ingredients.model.IngredientDTO getOne(@PathVariable("nameOrKey") String nameOrKey) {
+    public IngredientDTO getOne(@PathVariable("nameOrKey") String nameOrKey) {
         String query = normalize(nameOrKey);
         if (query.isEmpty()) {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
@@ -51,7 +51,7 @@ public class IngredientController {
 
     // POST /api/ingredients/_batch
     @PostMapping(path = "/_batch", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public List<app.goodbuy.ingredients.model.IngredientDTO> batch(@RequestBody List<String> names) {
+    public List<IngredientDTO> batch(@RequestBody List<String> names) {
         if (names == null) {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_request");
         }

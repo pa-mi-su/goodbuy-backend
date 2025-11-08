@@ -20,6 +20,7 @@
   <modules>
     <module>goodbuy-core</module>
     <module>goodbuy-api</module>
+    <module>goodbuy-adapters-catalog</module>
   </modules>
 
   <!-- Import Spring Boot's managed dependency versions -->

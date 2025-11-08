@@ -1,11 +1,10 @@
-package app.goodbuy.catalog.eandb;
+package app.goodbuy.adapters.catalog.eandb;
 
-import app.goodbuy.catalog.CatalogTransportException;
-import app.goodbuy.catalog.ExternalCatalogClient;
-import app.goodbuy.products.ProductDetailDto;
-import app.goodbuy.products.ProductDetailDto.ImageDto;
-import app.goodbuy.products.ProductDetailDto.IngredientDto;
-import app.goodbuy.products.ProductDto;
+import app.goodbuy.adapters.catalog.CatalogTransportException;
+import app.goodbuy.adapters.catalog.ExternalCatalogClient;
+import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.dto.ProductDetailDto.ImageDto;
+import app.goodbuy.core.products.dto.ProductDetailDto.IngredientDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -22,11 +21,12 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * EAN-DB client:
- *  - Keeps existing findByGtin(...) for backward compatibility (ProductDto).
- *  - Adds findDetailByGtin(...) that returns the richer ProductDetailDto for iOS.
+ * EAN-DB client.
+ *
+ * Implements ExternalCatalogClient with the rich ProductDetailDto from core.
  */
 public class EanDbCatalogClient implements ExternalCatalogClient {
+
     private static final Logger log = LoggerFactory.getLogger(EanDbCatalogClient.class);
 
     private final HttpClient http;
@@ -39,7 +39,8 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     private final String userAgent;
 
     public EanDbCatalogClient(String baseUrl, String bearerJwt, int connectTimeoutMs, int readTimeoutMs) {
-        this(baseUrl, bearerJwt, connectTimeoutMs, readTimeoutMs, "ean", "GoodBuy-Backend/0.1 (+https://goodbuy.app)");
+        this(baseUrl, bearerJwt, connectTimeoutMs, readTimeoutMs,
+                "ean", "GoodBuy-Backend/0.1 (+https://goodbuy.app)");
     }
 
     public EanDbCatalogClient(String baseUrl,
@@ -53,111 +54,40 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
         this.readTimeoutMs = readTimeoutMs;
         this.codeParamKey = (codeParamKey == null || codeParamKey.isBlank()) ? "ean" : codeParamKey;
         this.userAgent = (userAgent == null || userAgent.isBlank()) ? "GoodBuy-Backend" : userAgent;
+
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(100, connectTimeoutMs)))
                 .build();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // Legacy simple lookup (kept exactly so existing code continues to work)
+    // ExternalCatalogClient
     // ─────────────────────────────────────────────────────────────────────────────
+
     @Override
-    public Optional<ProductDto> findByGtin(String gtin14) throws CatalogTransportException {
+    public Optional<ProductDetailDto> findByGtin(String gtin14) throws CatalogTransportException {
         try {
             JsonNode product = fetchProductNode(gtin14);
-            if (product == null) return Optional.empty();
+            if (product == null) {
+                return Optional.empty();
+            }
 
-            String providerBarcode = text(product, "barcode");
-            String gtin = (providerBarcode != null && !providerBarcode.isBlank()) ? providerBarcode : toEan13(gtin14);
-
+            // GTIN / name / brand / category / description
+            String gtin = firstNonBlank(text(product, "barcode"), toEan13(gtin14));
             String name = firstNonBlank(
                     text(product, "titles", "en"),
                     firstValue(product.path("titles"))
             );
-
-            String brand = firstNonBlank(
-                    text(product, "manufacturer", "titles", "en"),
-                    firstValue(product.path("manufacturer").path("titles")),
-                    text(product, "manufacturer", "id")
-            );
-
-            String category = null;
-            JsonNode categories = product.path("categories");
-            if (categories.isArray() && categories.size() > 0) {
-                JsonNode c0 = categories.get(0);
-                category = firstNonBlank(
-                        text(c0, "titles", "en"),
-                        firstValue(c0.path("titles"))
-                );
-            }
-
-            List<String> images = new ArrayList<>();
-            JsonNode imgs = product.path("images");
-            if (imgs.isArray()) {
-                imgs.forEach(img -> {
-                    String url = text(img, "url");
-                    if (url != null && !url.isBlank()) images.add(url);
-                });
-            }
-
-            List<String> ingredients = new ArrayList<>();
-            JsonNode metaIngGroups = product.path("metadata").path("generic").path("ingredients");
-            if (metaIngGroups.isArray()) {
-                metaIngGroups.forEach(group -> {
-                    JsonNode arr = group.path("ingredientsGroup");
-                    if (arr.isArray()) {
-                        arr.forEach(ing -> {
-                            String s = firstNonBlank(
-                                    text(ing, "originalNames", "en"),
-                                    text(ing, "canonicalNames", "en"),
-                                    text(ing, "id")
-                            );
-                            if (s != null && !s.isBlank()) ingredients.add(s);
-                        });
-                    }
-                });
-            }
-
-            ProductDto dto = new ProductDto(
-                    gtin,
-                    emptyToNull(name),
-                    emptyToNull(brand),
-                    emptyToNull(category),
-                    images,
-                    ingredients,
-                    List.of(),   // claims not in this schema
-                    List.of()    // hazards not in this schema
-            );
-
-            log.debug("EAN-DB(simple) mapped {} → name={} brand={} imgs={} ingredients={}",
-                    gtin, safe(dto.name()), safe(dto.brand()), images.size(), ingredients.size());
-            return Optional.of(dto);
-
-        } catch (CatalogTransportException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new CatalogTransportException("catalog_transport_error: " + e.getMessage(), e);
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────────
-    // New rich lookup for iOS detail view
-    // ─────────────────────────────────────────────────────────────────────────────
-    public Optional<ProductDetailDto> findDetailByGtin(String gtin14) throws CatalogTransportException {
-        try {
-            JsonNode product = fetchProductNode(gtin14);
-            if (product == null) return Optional.empty();
-
-            // GTIN / name / brand / category / description
-            String gtin = firstNonBlank(text(product, "barcode"), toEan13(gtin14));
-            String name = firstNonBlank(text(product, "titles", "en"), firstValue(product.path("titles")));
             String brand = firstNonBlank(
                     text(product, "manufacturer", "titles", "en"),
                     firstValue(product.path("manufacturer").path("titles")),
                     text(product, "manufacturer", "id")
             );
             String category = extractFirstCategoryTitle(product);
-            String description = firstNonBlank(text(product, "descriptions", "en"), firstValue(product.path("descriptions")));
+            String description = firstNonBlank(
+                    text(product, "descriptions", "en"),
+                    firstValue(product.path("descriptions"))
+            );
 
             // Images
             List<ImageDto> images = new ArrayList<>();
@@ -190,7 +120,9 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
                             if (ext.isObject()) {
                                 ext.fieldNames().forEachRemaining(k -> {
                                     String v = ext.path(k).asText(null);
-                                    if (v != null && !v.isBlank()) externalIds.put(k, v);
+                                    if (v != null && !v.isBlank()) {
+                                        externalIds.put(k, v);
+                                    }
                                 });
                             }
 
@@ -212,30 +144,45 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
 
             // titles{lang:value}
             Map<String, String> titles = objectToLangMap(product.path("titles"));
+            if (titles.isEmpty()) {
+                titles = null;
+            }
 
             // manufacturer{id,en}
             Map<String, String> manufacturer = new LinkedHashMap<>();
             String mId = text(product, "manufacturer", "id");
             String mEn = text(product, "manufacturer", "titles", "en");
-            if (mId != null && !mId.isBlank()) manufacturer.put("id", mId);
-            if (mEn != null && !mEn.isBlank()) manufacturer.put("en", mEn);
-            if (manufacturer.isEmpty()) manufacturer = null;
+            if (mId != null && !mId.isBlank()) {
+                manufacturer.put("id", mId);
+            }
+            if (mEn != null && !mEn.isBlank()) {
+                manufacturer.put("en", mEn);
+            }
+            if (manufacturer.isEmpty()) {
+                manufacturer = null;
+            }
 
             ProductDetailDto out = new ProductDetailDto(
-                    gtin,
+                    emptyToNull(gtin),
                     emptyToNull(name),
                     emptyToNull(brand),
                     emptyToNull(category),
                     emptyToNull(description),
                     images,
                     ingredients,
-                    titles.isEmpty() ? null : titles,
+                    titles,
                     manufacturer,
                     "EAN-DB"
             );
 
-            log.debug("EAN-DB(detail) mapped {} → name={} brand={} imgs={} ingredients={}",
-                    gtin, safe(out.name()), safe(out.brand()), out.images().size(), out.ingredients().size());
+            log.debug(
+                    "EAN-DB(detail) mapped {} → name={} brand={} imgs={} ingredients={}",
+                    gtin14,
+                    safe(out.name()),
+                    safe(out.brand()),
+                    out.images().size(),
+                    out.ingredients().size()
+            );
 
             return Optional.of(out);
 
@@ -247,8 +194,9 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // HTTP + parsing shared by both methods
+    // HTTP + parsing
     // ─────────────────────────────────────────────────────────────────────────────
+
     private JsonNode fetchProductNode(String gtin14) throws Exception {
         URI uri = buildUri(gtin14);
         HttpRequest req = HttpRequest.newBuilder(uri)
@@ -266,7 +214,8 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
 
         int sc = res.statusCode();
         String body = res.body();
-        log.debug("EanDB GET {} -> status={} bytes={}", uri, sc, (body == null ? 0 : body.length()));
+
+        log.debug("EanDB GET {} -> status={} bytes={}", uri, sc, body == null ? 0 : body.length());
 
         if (sc == 404) {
             log.debug("EAN-DB miss status=404 durMs={} body={}", ms, truncate(body, 512));
@@ -283,20 +232,25 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
 
         JsonNode root = om.readTree(body);
         JsonNode product = root.path("product");
-        if (product.isMissingNode() || product.isNull()) return null;
+        if (product.isMissingNode() || product.isNull()) {
+            return null;
+        }
         return product;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
     // URI helpers
     // ─────────────────────────────────────────────────────────────────────────────
+
     private URI buildUri(String gtin14) {
         String ean13 = toEan13(gtin14);
         String enc = URLEncoder.encode(ean13, StandardCharsets.UTF_8);
         String base = this.baseUrl;
+
         if (base.matches(".*/product$")) {
             return URI.create(base + "/" + enc);
         }
+
         String sep = base.contains("?") ? "&" : "?";
         return URI.create(base + sep + codeParamKey + "=" + enc);
     }
@@ -312,18 +266,22 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     // ─────────────────────────────────────────────────────────────────────────────
     // Mapping helpers
     // ─────────────────────────────────────────────────────────────────────────────
+
     private static String extractFirstCategoryTitle(JsonNode prod) {
         JsonNode cats = prod.path("categories");
         if (cats.isArray() && cats.size() > 0) {
             JsonNode titles = cats.get(0).path("titles");
             if (titles.isObject()) {
                 String en = titles.path("en").asText(null);
-                if (en != null && !en.isBlank()) return en;
+                if (en != null && !en.isBlank()) {
+                    return en;
+                }
                 var it = titles.fields();
                 while (it.hasNext()) {
                     var e = it.next();
-                    if (e.getValue().isTextual() && !e.getValue().asText().isBlank())
+                    if (e.getValue().isTextual() && !e.getValue().asText().isBlank()) {
                         return e.getValue().asText();
+                    }
                 }
             }
         }
@@ -331,11 +289,15 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     }
 
     private static Map<String, String> objectToLangMap(JsonNode obj) {
-        if (obj == null || !obj.isObject()) return Collections.emptyMap();
+        if (obj == null || !obj.isObject()) {
+            return Collections.emptyMap();
+        }
         Map<String, String> out = new LinkedHashMap<>();
         obj.fieldNames().forEachRemaining(k -> {
             String v = obj.path(k).asText(null);
-            if (v != null && !v.isBlank()) out.put(k, v);
+            if (v != null && !v.isBlank()) {
+                out.put(k, v);
+            }
         });
         return out;
     }
@@ -343,17 +305,19 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     private static Integer intOrNull(JsonNode n, String field) {
         JsonNode v = n.path(field);
         return v.isIntegralNumber() ? v.asInt() : null;
-        // (width/height sometimes are present, sometimes not; keep null when absent)
     }
 
     private static Boolean boolOrNull(JsonNode n, String field) {
         JsonNode v = n.path(field);
-        return v.isMissingNode() || v.isNull() ? null : v.asBoolean();
+        return (v.isMissingNode() || v.isNull()) ? null : v.asBoolean();
     }
 
     private static String text(JsonNode node, String... path) {
+        if (node == null) return null;
         JsonNode cur = node;
-        for (String p : path) cur = cur.path(p);
+        for (String p : path) {
+            cur = cur.path(p);
+        }
         String s = cur.isMissingNode() || cur.isNull() ? null : cur.asText(null);
         return (s != null && !s.isBlank()) ? s : null;
     }
@@ -365,22 +329,33 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
         while (it.hasNext()) {
             String k = it.next();
             String v = titlesObj.path(k).asText(null);
-            if (v != null && !v.isBlank()) return v;
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
         }
         return null;
     }
 
     private static String firstNonBlank(String... vals) {
         if (vals == null) return null;
-        for (String v : vals) if (v != null && !v.isBlank()) return v;
+        for (String v : vals) {
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
+        }
         return null;
     }
 
     private static String truncate(String s, int max) {
         if (s == null) return null;
-        return s.length() <= max ? s : s.substring(0, max) + "…";
+        return (s.length() <= max) ? s : s.substring(0, max) + "…";
     }
 
-    private static String emptyToNull(String s) { return (s == null || s.isBlank()) ? null : s; }
-    private static String safe(String s) { return s == null ? "-" : s; }
+    private static String emptyToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
+    }
+
+    private static String safe(String s) {
+        return s == null ? "-" : s;
+    }
 }

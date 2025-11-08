@@ -1,8 +1,9 @@
-package app.goodbuy.catalog.eansearch;
+package app.goodbuy.adapters.catalog.eansearch;
 
-import app.goodbuy.catalog.CatalogTransportException;
-import app.goodbuy.catalog.ExternalCatalogClient;
-import app.goodbuy.products.ProductDto;
+import app.goodbuy.adapters.catalog.CatalogTransportException;
+import app.goodbuy.adapters.catalog.ExternalCatalogClient;
+import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.dto.ProductDetailDto.ImageDto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -15,16 +16,20 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
  * Lightweight client for the EAN-Search.org API.
- * Example request:
- *   https://api.ean-search.org/api?op=barcode-ean&format=json&key=YOUR_KEY&ean=CODE
+ * Maps into ProductDetailDto (core DTO).
+ *
+ * NOTE: EAN-Search returns limited data; we populate what we can
+ * and leave the rest as null/empty.
  */
 public class EanSearchClient implements ExternalCatalogClient {
+
     private static final Logger log = LoggerFactory.getLogger(EanSearchClient.class);
 
     private final HttpClient http;
@@ -43,12 +48,13 @@ public class EanSearchClient implements ExternalCatalogClient {
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(100, connectTimeoutMs)))
                 .build();
+
         log.info("EAN-Search client initialized baseUrl={} connect={}ms read={}ms",
-                baseUrl, connectTimeoutMs, readTimeoutMs);
+                this.baseUrl, this.connectTimeoutMs, this.readTimeoutMs);
     }
 
     @Override
-    public Optional<ProductDto> findByGtin(String gtin14) throws CatalogTransportException {
+    public Optional<ProductDetailDto> findByGtin(String gtin14) throws CatalogTransportException {
         // EAN-Search expects EAN-13, not GTIN-14 → drop leading zero if present
         String ean13 = (gtin14 != null && gtin14.length() == 14 && gtin14.startsWith("0"))
                 ? gtin14.substring(1)
@@ -69,6 +75,7 @@ public class EanSearchClient implements ExternalCatalogClient {
             HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
             int sc = res.statusCode();
             String body = res.body();
+
             log.debug("EAN-Search GET {} -> status={} bytes={}", uri, sc, body == null ? 0 : body.length());
 
             if (sc == 404) {
@@ -88,20 +95,47 @@ public class EanSearchClient implements ExternalCatalogClient {
 
             JsonNode first = resultArray.get(0);
 
+            // Basic fields
             String ean = text(first, "ean");
-            if (ean == null || ean.isBlank()) ean = ean13;
+            if (ean == null || ean.isBlank()) {
+                ean = ean13;
+            }
 
             String name = text(first, "name", "title", "product");
             String brand = text(first, "brand", "manufacturer", "company");
             String category = text(first, "category");
+            String description = text(first, "description", "details"); // best-effort; may be null
 
-            List<String> images = new ArrayList<>();
-            String img = text(first, "image");
-            if (img != null && !img.isBlank()) images.add(img);
+            // Single image, if available
+            String imgUrl = text(first, "image");
+            List<ImageDto> images = (imgUrl != null && !imgUrl.isBlank())
+                    ? List.of(new ImageDto(imgUrl, null, null))
+                    : Collections.emptyList();
 
-            ProductDto dto = new ProductDto(
-                    ean, emptyToNull(name), emptyToNull(brand), emptyToNull(category),
-                    images, List.of(), List.of(), List.of()
+            // EAN-Search does not expose structured ingredients → empty
+            List<ProductDetailDto.IngredientDto> ingredients = Collections.emptyList();
+
+            // titles: if we have a name, expose as {"en": name}
+            Map<String, String> titles = (name != null && !name.isBlank())
+                    ? Map.of("en", name)
+                    : null;
+
+            // manufacturer map from brand if present
+            Map<String, String> manufacturer = (brand != null && !brand.isBlank())
+                    ? Map.of("en", brand)
+                    : null;
+
+            ProductDetailDto dto = new ProductDetailDto(
+                    ean,
+                    emptyToNull(name),
+                    emptyToNull(brand),
+                    emptyToNull(category),
+                    emptyToNull(description),
+                    images,
+                    ingredients,
+                    titles,
+                    manufacturer,
+                    "EAN-SEARCH"
             );
 
             log.debug("EAN-Search hit ean={} name={} brand={}", ean, safe(name), safe(brand));
@@ -114,7 +148,10 @@ public class EanSearchClient implements ExternalCatalogClient {
         }
     }
 
+    // ── helpers ────────────────────────────────────────────────────────────────
+
     private static String text(JsonNode node, String... keys) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
         for (String k : keys) {
             JsonNode v = node.path(k);
             if (!v.isMissingNode() && !v.isNull()) {
@@ -130,6 +167,11 @@ public class EanSearchClient implements ExternalCatalogClient {
         return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 
-    private static String emptyToNull(String s) { return (s == null || s.isBlank()) ? null : s; }
-    private static String safe(String s) { return s == null ? "-" : s; }
+    private static String emptyToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
+    }
+
+    private static String safe(String s) {
+        return s == null ? "-" : s;
+    }
 }
