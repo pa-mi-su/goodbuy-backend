@@ -385,9 +385,6 @@ Design Philosophy
 
 ## Project Structure
 
-<details>
-<summary>Click to expand</summary>
-
 ```text
 goodbuy-backend/
 ├─ pom.xml
