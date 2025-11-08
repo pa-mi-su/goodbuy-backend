@@ -194,6 +194,105 @@ docker compose logs goodbuy-api --tail=200
 
 ---
 
+🧭 Product API Endpoints Overview
+
+GoodBuy exposes two main product endpoints under /v1/products.
+They serve different data shapes and use cases.
+
+⸻
+
+GET /v1/products/{code} — Simple / Mobile-Friendly
+
+This endpoint returns a flattened product view designed for lightweight clients such as the iOS app.
+
+Example Response:
+{
+  "gtin": "0033200011408",
+  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
+  "brand": "Arm & Hammer",
+  "category": "Baking Soda",
+  "images": [
+    "https://images.ean-db.com/.../0033200011408/..."
+  ],
+  "ingredients": [
+    "Sodium Bicarbonate"
+  ],
+  "claims": [],
+  "hazards": [],
+  "source": "EAN-DB"
+}
+
+Key Points
+	•	✅ Shape matches the iOS Product model
+	•	images → array of string URLs
+	•	ingredients → array of string names
+	•	claims / hazards → arrays (currently empty but reserved)
+	•	✅ Cached for 5 min for responsiveness
+	•	✅ Safe, stable contract (no nested DTOs)
+	•	🔄 Internally uses the richer DTO but flattens it for backward compatibility
+
+Intended Use
+
+Use this endpoint for:
+	•	Mobile and web clients needing fast lookups
+	•	Scanning flows where only name, brand, images, and ingredient names are required
+
+⸻
+
+GET /v1/products/{code}/detail — Rich / Developer / Future-Oriented
+
+This endpoint returns the full structured DTO with detailed fields.
+
+Example Response
+
+{
+  "gtin": "0033200011408",
+  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
+  "brand": "Arm & Hammer",
+  "category": "Baking Soda",
+  "images": [
+    { "url": "...", "width": 500, "height": 500 }
+  ],
+  "ingredients": [
+    {
+      "id": "e500-ii",
+      "original": "Sodium Bicarbonate",
+      "canonical": "Baking Soda (Sodium Bicarbonate, E500-ii)",
+      "externalIds": { "cosIng": "37736" },
+      "isVegan": true,
+      "isVegetarian": true
+    }
+  ],
+  "source": "EAN-DB"
+}
+
+Key Points
+	•	🧩 Returns full ProductDetailDto
+	•	📦 Includes nested image and ingredient objects
+	•	💡 Enables future enrichment (toxicity scores, regulation data, etc.)
+	•	🔄 Ideal for dashboards, admin tools, or advanced clients
+
+Intended Use
+
+Use this endpoint for:
+	•	Internal APIs, analysis tools, or future app versions
+	•	When you need structured metadata (ingredient IDs, external references, etc.)
+
+⸻
+
+📘 Summary
+
+/v1/products/{code} * Simple, flattened product view * Arrays of strings * Current iOS app
+
+/v1/products/{code}/detail * Full structured DTO * Nested objects * Admin tools, future clients
+
+Design Philosophy
+	•	Maintain backward-compatible responses for existing mobile apps.
+	•	Allow gradual evolution toward richer, self-descriptive data models.
+	•	Internally, both endpoints share the same lookup and normalization logic but differ only in serialization.
+
+---
+
 ## License
 
 © 2025 GoodBuy. All rights reserved.

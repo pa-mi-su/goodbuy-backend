@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Validated
 @RestController
@@ -29,24 +30,58 @@ public class ProductController {
 
     public ProductController(ProductService service) { this.service = service; }
 
-    /** Simple record to add "source" field to output for the simple endpoint. */
+    /**
+     * Simple, UI-ready view for the legacy `/v1/products/{code}` endpoint.
+     * Must stay compatible with the iOS `Product` model:
+     *  - images: [String]
+     *  - ingredients: [String]
+     *  - claims: [String]
+     *  - hazards: [String]
+     */
     public record ProductView(
             String gtin,
             String name,
             String brand,
             String category,
-            List<ProductDetailDto.ImageDto> images,
-            List<ProductDetailDto.IngredientDto> ingredients,
+            List<String> images,
+            List<String> ingredients,
+            List<String> claims,
+            List<String> hazards,
             String source
     ) {
         static ProductView of(ProductDetailDto dto, String source) {
+            // Flatten rich images → plain URL strings
+            List<String> imageUrls = (dto.images() == null) ? List.of() :
+                    dto.images().stream()
+                            .map(ProductDetailDto.ImageDto::url)
+                            .filter(Objects::nonNull)
+                            .map(String::trim)
+                            .filter(s -> !s.isEmpty())
+                            .toList();
+
+            // Flatten rich ingredients → displayable strings
+            List<String> ingredientNames = (dto.ingredients() == null) ? List.of() :
+                    dto.ingredients().stream()
+                            .filter(Objects::nonNull)
+                            .map(i -> {
+                                if (i.original() != null && !i.original().isBlank()) return i.original().trim();
+                                if (i.canonical() != null && !i.canonical().isBlank()) return i.canonical().trim();
+                                if (i.id() != null && !i.id().isBlank()) return i.id().trim();
+                                return null;
+                            })
+                            .filter(Objects::nonNull)
+                            .distinct()
+                            .toList();
+
             return new ProductView(
                     dto.gtin(),
                     dto.name(),
                     dto.brand(),
                     dto.category(),
-                    dto.images(),
-                    dto.ingredients(),
+                    imageUrls,
+                    ingredientNames,
+                    List.of(), // claims reserved for future use
+                    List.of(), // hazards reserved for future use
                     source
             );
         }
@@ -56,6 +91,7 @@ public class ProductController {
     @GetMapping("/{code}")
     public ResponseEntity<?> getProduct(@PathVariable("code") String rawCode) {
         final String source = service.activeSourceName();
+        log.info("ProductController.getProduct: activeSource={}", source);
 
         final String gtin14;
         try {
@@ -66,11 +102,13 @@ public class ProductController {
 
         ProductDetailDto dto = service.getByGtinOrNull(gtin14);
         if (dto == null) {
-            log.warn("product not found gtin14={} source={}", gtin14, source);
+            log.warn("ProductController.getProduct: product not found gtin14={} source={}", gtin14, source);
             return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
         }
 
-        log.info("served product gtin14={} name={} brand={} source={}", gtin14, safe(dto.name()), safe(dto.brand()), source);
+        log.info("served product gtin14={} name={} brand={} source={}",
+                gtin14, safe(dto.name()), safe(dto.brand()), source);
+
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePublic())
                 .header("X-Product-Source", source)
@@ -81,6 +119,7 @@ public class ProductController {
     @GetMapping("/{code}/detail")
     public ResponseEntity<?> getProductDetail(@PathVariable("code") String rawCode) {
         final String source = service.activeSourceName();
+        log.info("ProductController.getProductDetail: activeSource={}", source);
 
         final String gtin14;
         try {
@@ -91,11 +130,13 @@ public class ProductController {
 
         ProductDetailDto dto = service.getDetailByGtinOrNull(gtin14);
         if (dto == null) {
-            log.warn("product detail not found gtin14={} source={}", gtin14, source);
+            log.warn("ProductController.getProductDetail: product detail not found gtin14={} source={}", gtin14, source);
             return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
         }
 
-        log.info("served product DETAIL gtin14={} name={} brand={} source={}", gtin14, safe(dto.name()), safe(dto.brand()), dto.source());
+        log.info("served product DETAIL gtin14={} name={} brand={} source={}",
+                gtin14, safe(dto.name()), safe(dto.brand()), dto.source());
+
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(Duration.ofMinutes(5)).cachePublic())
                 .header("X-Product-Source", dto.source() == null ? source : dto.source())
