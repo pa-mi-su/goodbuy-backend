@@ -140,7 +140,6 @@ GET /api/ingredients/sodium-bicarbonate
 
 ## Project Structure
 
-```text
 goodbuy-backend/
 ├─ pom.xml
 ├─ docker-compose.yml
@@ -193,7 +192,7 @@ goodbuy-backend/
       ├─ V2__aliases_table.sql
       └─ V3__hazards_table.sql
 
-### 🧩 Module Overview
+## 🧩 Module Overview
 
 The project is built using a **modular, hexagonal architecture** that keeps the API, business logic, and integrations cleanly separated.
 
@@ -214,7 +213,7 @@ The architecture enforces a clean separation between layers —
 
 This design makes the system **scalable, testable, and easy to maintain**.
 
-### 📡 Request Flow (End-to-End)
+## 📡 Request Flow (End-to-End)
 
 Below is a high-level walkthrough of how a typical request (like scanning a barcode in the iOS app) moves through the system:
 
@@ -291,7 +290,7 @@ docker compose logs goodbuy-api --tail=200
 
 ---
 
-🧭 Product API Endpoints Overview
+## 🧭 Product API Endpoints Overview
 
 GoodBuy exposes two main product endpoints under /v1/products.
 They serve different data shapes and use cases.
@@ -377,7 +376,7 @@ Use this endpoint for:
 
 ⸻
 
-📘 Summary
+## 📘 Summary
 
 /v1/products/{code} * Simple, flattened product view * Arrays of strings * Current iOS app
 
@@ -390,7 +389,7 @@ Design Philosophy
 
 ---
 
-### 🛠 Tech Stack
+## 🛠 Tech Stack
 
 | Layer | Technology |
 |--------|-------------|
