@@ -11,11 +11,12 @@
 ---
 
 ## Table of Contents
+
 - [Overview](#overview)
 - [System Architecture Diagram](#system-architecture-diagram)
 - [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [Product API Endpoints](#product-api-endpoints)
+- [Logging and Running](#logging-and-running)
+- [Product API Endpoints](#product-api-endpoints-overview)
 - [Tech Stack](#tech-stack)
 - [License](#license)
 
@@ -34,107 +35,71 @@
 
 ---
 
-## 🧭 System Architecture Diagram
+## System Architecture Diagram
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
-│                             iOS / Frontend                          │
+│                             iOS / Frontend                         │
 │─────────────────────────────────────────────────────────────────────│
-│ - Scans barcode (e.g. 0033200011408)                                │
-│ - Calls backend: GET /v1/products/{code}                            │
+│ - Scans barcode (e.g. 0033200011408)                               │
+│ - Calls backend: GET /v1/products/{code}                           │
 └─────────────────────────────────────────────────────────────────────┘
                   │
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          goodbuy-api (Spring Boot)                  │
+│                          goodbuy-api (Spring Boot)                 │
 │─────────────────────────────────────────────────────────────────────│
-│ 🧩 REST Controllers                                                  │
-│   • ProductController (/v1/products)                                │
-│   • IngredientController (/api/ingredients)                         │
+│ REST Controllers                                                   │
+│   • ProductController (/v1/products)                               │
+│   • IngredientController (/api/ingredients)                        │
 │                                                                     │
-│ 🧠 Services                                                          │
-│   • ProductService  → orchestrates catalog lookup                   │
-│   • IngredientReadService → orchestrates ingredient DB reads        │
+│ Services                                                           │
+│   • ProductService → orchestrates catalog lookup                   │
+│   • IngredientReadService → orchestrates ingredient DB reads       │
 │                                                                     │
-│ 🪄 Shared Infrastructure                                             │
-│   • RequestLoggingFilter, GlobalExceptionHandler                    │
-│   • CORS & Swagger config                                           │
+│ Shared Infrastructure                                              │
+│   • RequestLoggingFilter, GlobalExceptionHandler                   │
+│   • CORS & Swagger config                                          │
 └─────────────────────────────────────────────────────────────────────┘
                   │
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        goodbuy-core (Domain Layer)                  │
+│                        goodbuy-core (Domain Layer)                 │
 │─────────────────────────────────────────────────────────────────────│
-│ 🧱 DTOs & Ports (Pure Java)                                         │
-│   • ProductDetailDto, IngredientDTO                                 │
-│   • IngredientReadPort, ExternalCatalogClient                       │
-│   • BarcodeNormalizer, Enums, Util classes                          │
+│ DTOs & Ports (Pure Java)                                           │
+│   • ProductDetailDto, IngredientDto                                │
+│   • ExternalCatalogClient, IngredientReadPort                      │
+│   • BarcodeNormalizer, enums, utils                                │
 │                                                                     │
-│ ❗ No Spring, no HTTP, no DB — pure data and contracts.              │
+│ No Spring, no HTTP, no DB — pure data + contracts                  │
 └─────────────────────────────────────────────────────────────────────┘
           │                                 │
           ▼                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│             goodbuy-adapters-catalog (External Providers)           │
+│             goodbuy-adapters-catalog (External Providers)          │
 │─────────────────────────────────────────────────────────────────────│
-│ 🌐 EanDbCatalogClient                                               │
-│   - Calls https://ean-db.com/api/v2/product/{gtin}                  │
-│   - Maps JSON → ProductDetailDto                                    │
-│                                                                     │
-│ 🌐 EanSearchClient (optional fallback)                              │
-│   - Alternative provider (https://api.ean-search.org)               │
-│                                                                     │
-│ ⚙️ CatalogConfig / CatalogProperties                                │
-│   - Chooses which provider to activate                              │
-│   - Handles timeouts, API keys, etc.                                │
+│ • EanDbCatalogClient                                               │
+│     - Calls https://ean-db.com/api/v2/product/{gtin}               │
+│     - Maps JSON → ProductDetailDto                                 │
+│ • EanSearchClient (optional)                                       │
+│ • CatalogConfig / CatalogProperties                                │
+│     - Chooses provider, configures timeouts & API keys             │
 └─────────────────────────────────────────────────────────────────────┘
           │
           ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Postgres Database                           │
+│                    goodbuy-adapters-core + Postgres                │
 │─────────────────────────────────────────────────────────────────────│
-│ 🧬 IngredientRepository (JPA)                                       │
-│   - Reads ingredient data                                           │
-│   - Used by CoreIngredientReadAdapter                               │
-│                                                                     │
-│ 🧬 Tables: ingredients, aliases, hazards, tags, etc.                │
+│ • CoreIngredientReadAdapter                                        │
+│ • IngredientRepository (JPA)                                       │
+│ • Tables: ingredients, aliases, hazards, tags, etc.                │
 └─────────────────────────────────────────────────────────────────────┘
+```
 
-iOS → ProductController → ProductService → EanDbCatalogClient → EAN-DB API → JSON mapped to ProductDetailDto → returned to iOS
+**End-to-end flow (simplified)**
 
-iOS → IngredientController → IngredientReadService → CoreIngredientReadAdapter → IngredientRepository (Postgres) → IngredientDTO → returned to iOS
-
-🔄 End-to-End Request Flow
-
-1️⃣ Product Lookup
-	1.	iOS app scans a barcode and calls:
-
-GET /v1/products/0033200011408
-
-	2.	ProductController validates and normalizes the code → GTIN-14.
-	3.	ProductService asks ExternalCatalogClient (e.g., EanDbCatalogClient) for details.
-	4.	EanDbCatalogClient calls EAN-DB, maps the JSON response → ProductDetailDto.
-	5.	The result is wrapped into a ProductView or returned directly for /detail.
-	6.	Response sent back to iOS:
-
-{
-  "gtin": "0033200011408",
-  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
-  "brand": "Arm & Hammer",
-  "category": "Baking Soda",
-  "images": [...],
-  "ingredients": [...],
-  "source": "EAN-DB"
-}
-
-2️⃣ Ingredient Detail Lookup
-	1.	Client requests:
-
-GET /api/ingredients/sodium-bicarbonate
-
-	2.	IngredientController → IngredientReadService → IngredientReadPort.
-	3.	CoreIngredientReadAdapter queries Postgres (IngredientRepository).
-	4.	Result mapped → IngredientDTO and returned as JSON.
+- iOS → `ProductController` → `ProductService` → `EanDbCatalogClient` → EAN-DB API → `ProductDetailDto` → response to iOS
+- iOS → `IngredientController` → `IngredientReadService` → `CoreIngredientReadAdapter` → `IngredientRepository` (Postgres) → `IngredientDto` → response to iOS
 
 ---
 
@@ -145,7 +110,7 @@ goodbuy-backend/
 ├─ pom.xml
 ├─ docker-compose.yml
 │
-├─ goodbuy-api/                  # REST API (Spring Boot)
+├─ goodbuy-api/                          # REST API (Spring Boot)
 │  └─ src/main/java/app/goodbuy/
 │     ├─ GoodBuyBackendApplication.java
 │     ├─ api/
@@ -161,7 +126,7 @@ goodbuy-backend/
 │        ├─ IngredientController.java
 │        └─ IngredientReadService.java
 │
-├─ goodbuy-core/                 # Domain logic + DTOs
+├─ goodbuy-core/                         # Domain logic + DTOs + ports
 │  └─ src/main/java/app/goodbuy/core/
 │     ├─ products/
 │     │  ├─ dto/ProductDetailDto.java
@@ -171,14 +136,14 @@ goodbuy-backend/
 │        ├─ dto/IngredientDto.java
 │        └─ ports/IngredientReadPort.java
 │
-├─ goodbuy-adapters-catalog/     # External APIs (EAN-DB, etc.)
+├─ goodbuy-adapters-catalog/             # External catalog integrations
 │  └─ src/main/java/app/goodbuy/adapters/catalog/
 │     ├─ CatalogConfig.java
 │     ├─ CatalogProperties.java
 │     ├─ eandb/EanDbCatalogClient.java
 │     └─ eansearch/EanSearchClient.java
 │
-├─ goodbuy-adapters-core/        # Postgres adapter
+├─ goodbuy-adapters-core/                # Postgres adapter
 │  └─ src/main/java/app/goodbuy/adapters/core/
 │     ├─ CoreIngredientReadAdapter.java
 │     ├─ repository/IngredientRepository.java
@@ -187,221 +152,96 @@ goodbuy-backend/
 │        ├─ AliasEntity.java
 │        └─ HazardEntity.java
 │
-└─ goodbuy-migrations/           # Flyway SQL migrations
+└─ goodbuy-migrations/                   # Flyway migrations
    └─ src/main/resources/db/migration/
       ├─ V1__ingredients_init.sql
       ├─ V2__aliases_table.sql
       └─ V3__hazards_table.sql
+```
 
-### 🧩 Module Overview
+### Module Overview
 
-The project is built using a **modular, hexagonal architecture** that keeps the API, business logic, and integrations cleanly separated.
+The project uses a **modular, hexagonal architecture**:
 
-| Module | Description |
-|--------|--------------|
-| **goodbuy-api** | The main **Spring Boot application**. Exposes REST endpoints (`/v1/products`, `/api/ingredients`), handles requests from the iOS app, and delegates logic to the core services. |
-| **goodbuy-core** | The **domain layer**, containing DTOs, utility classes, and *ports* (interfaces) that define communication boundaries. This layer is framework-agnostic (no Spring dependencies). |
-| **goodbuy-adapters-catalog** | Implements **external catalog integrations** (e.g., `EanDbCatalogClient`, `EanSearchClient`) for fetching product and ingredient data from third-party APIs. |
-| **goodbuy-adapters-core** | Provides **internal persistence adapters** for PostgreSQL — JPA repositories, entity mappings, and database read/write logic for ingredients, aliases, and hazards. |
-| **goodbuy-migrations** | Contains **Flyway SQL migrations** that create and evolve the database schema across environments. |
-
-**In short:**
-The architecture enforces a clean separation between layers —
-- the API layer (what the world sees),
-- the core domain (business rules and contracts),
-- the adapters (how we connect to the outside world),
-- and the database (persistent state).
-
-This design makes the system **scalable, testable, and easy to maintain**.
-
-### 📡 Request Flow (End-to-End)
-
-Below is a high-level walkthrough of how a typical request (like scanning a barcode in the iOS app) moves through the system:
-
-1. **iOS App**
-   - The user scans a barcode.
-   - The app sends a `GET /v1/products/{code}` request to the backend API.
-
-2. **goodbuy-api (Spring Boot)**
-   - `ProductController` receives the request and normalizes the barcode.
-   - It calls `ProductService`, which decides where to fetch the data from:
-     - External catalog (EAN-DB / EAN-Search)
-     - Internal database (if product or ingredient data is already cached)
-
-3. **goodbuy-core (Domain Layer)**
-   - Defines interfaces (ports) that describe what data the API *needs*, not *how* to get it.
-   - `ExternalCatalogClient` and `IngredientReadPort` are the core contracts used by the API layer.
-
-4. **goodbuy-adapters-catalog**
-   - Implements `ExternalCatalogClient` via real integrations:
-     - `EanDbCatalogClient` → connects to [EAN-DB API](https://ean-db.com)
-     - (Optional) `EanSearchClient` → fallback lookup source
-   - These adapters transform external JSON responses into internal DTOs (`ProductDetailDto`).
-
-5. **goodbuy-adapters-core**
-   - Implements `IngredientReadPort` using `CoreIngredientReadAdapter`.
-   - Uses JPA repositories (`IngredientRepository`, `AliasRepository`, etc.) to query or persist data in PostgreSQL.
-
-6. **goodbuy-migrations**
-   - Provides versioned Flyway scripts that define and evolve the PostgreSQL schema.
-   - Ensures that all environments (dev, staging, prod) stay in sync.
-
-7. **Response**
-   - The controller combines product data + ingredient metadata into a JSON payload.
-   - It returns it to the iOS app, where the user sees:
-     - Product name, brand, image(s)
-     - Ingredient list with clickable links
-     - Safety score and hazard tags (if available)
-
----
-
-**Summary:**
-> 🧠 *Each layer has one clear job.*
-> - The API talks to the Core (never directly to adapters).
-> - The Core defines what it needs, not where it comes from.
-> - The Adapters plug in real implementations (APIs, databases).
->
-> This ensures **loose coupling**, **clean testing**, and **easy future integrations** (e.g., adding new product sources or AI-driven ingredient ratings).
+- **goodbuy-api** – HTTP edge: controllers, filters, configs. Talks only to services/ports.
+- **goodbuy-core** – Domain contracts + DTOs. No framework dependencies.
+- **goodbuy-adapters-catalog** – External API clients implementing `ExternalCatalogClient`.
+- **goodbuy-adapters-core** – Postgres adapter implementing `IngredientReadPort`.
+- **goodbuy-migrations** – Flyway migrations for schema.
 
 ---
 
 ## Logging and Running
 
-•	Dev (plain logs):
-        SPRING_PROFILES_ACTIVE=dev docker compose up -d --build && docker compose logs -f goodbuy-api
+**Dev**
 
-•	Prod (plain logs):
-        SPRING_PROFILES_ACTIVE=prod docker compose up -d --build && docker compose logs -f goodbuy-api
+```bash
+SPRING_PROFILES_ACTIVE=dev docker compose up -d --build
+docker compose logs -f goodbuy-api
+```
 
-•	Prod (JSON logs):
-        SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build && docker compose logs -f goodbuy-api
+**Prod**
 
----
+```bash
+SPRING_PROFILES_ACTIVE=prod docker compose up -d --build
+docker compose logs -f goodbuy-api
+```
 
+**Prod (JSON logs)**
 
-1) Clean + rebuild the JAR (to purge the old file from the classpath)
+```bash
+SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build
+docker compose logs -f goodbuy-api
+```
+
+**Rebuild flow**
+
+```bash
 mvn -q -B -DskipTests clean package -pl goodbuy-api -am
-
-2) Rebuild the Docker image (no cache) and start API
 docker compose build --no-cache goodbuy-api
 docker compose up -d goodbuy-api
-
-3) Tail Logs
 docker compose logs goodbuy-api --tail=200
+```
 
 ---
 
-🧭 Product API Endpoints Overview
+## Product API Endpoints Overview
 
-GoodBuy exposes two main product endpoints under /v1/products.
-They serve different data shapes and use cases.
+GoodBuy exposes two main endpoints under `/v1/products`:
 
-⸻
+### `GET /v1/products/{code}` — Simple / Mobile-Friendly
 
-GET /v1/products/{code} — Simple / Mobile-Friendly
+Flattened shape for the iOS app.
 
-This endpoint returns a flattened product view designed for lightweight clients such as the iOS app.
+- `images`: array of URL strings
+- `ingredients`: array of ingredient names
+- Cached for 5 minutes
+- Backward-compatible & lightweight
 
-Example Response:
-{
-  "gtin": "0033200011408",
-  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
-  "brand": "Arm & Hammer",
-  "category": "Baking Soda",
-  "images": [
-    "https://images.ean-db.com/.../0033200011408/..."
-  ],
-  "ingredients": [
-    "Sodium Bicarbonate"
-  ],
-  "claims": [],
-  "hazards": [],
-  "source": "EAN-DB"
-}
+### `GET /v1/products/{code}/detail` — Rich / Future-Oriented
 
-Key Points
-	•	✅ Shape matches the iOS Product model
-	•	images → array of string URLs
-	•	ingredients → array of string names
-	•	claims / hazards → arrays (currently empty but reserved)
-	•	✅ Cached for 5 min for responsiveness
-	•	✅ Safe, stable contract (no nested DTOs)
-	•	🔄 Internally uses the richer DTO but flattens it for backward compatibility
+Returns full `ProductDetailDto`:
 
-Intended Use
+- Nested image objects (`url`, dimensions, etc.)
+- Nested ingredient objects (ids, external IDs, vegan flags, etc.)
+- Ideal for internal tools / future richer clients
 
-Use this endpoint for:
-	•	Mobile and web clients needing fast lookups
-	•	Scanning flows where only name, brand, images, and ingredient names are required
-
-⸻
-
-GET /v1/products/{code}/detail — Rich / Developer / Future-Oriented
-
-This endpoint returns the full structured DTO with detailed fields.
-
-Example Response
-
-{
-  "gtin": "0033200011408",
-  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
-  "brand": "Arm & Hammer",
-  "category": "Baking Soda",
-  "images": [
-    { "url": "...", "width": 500, "height": 500 }
-  ],
-  "ingredients": [
-    {
-      "id": "e500-ii",
-      "original": "Sodium Bicarbonate",
-      "canonical": "Baking Soda (Sodium Bicarbonate, E500-ii)",
-      "externalIds": { "cosIng": "37736" },
-      "isVegan": true,
-      "isVegetarian": true
-    }
-  ],
-  "source": "EAN-DB"
-}
-
-Key Points
-	•	🧩 Returns full ProductDetailDto
-	•	📦 Includes nested image and ingredient objects
-	•	💡 Enables future enrichment (toxicity scores, regulation data, etc.)
-	•	🔄 Ideal for dashboards, admin tools, or advanced clients
-
-Intended Use
-
-Use this endpoint for:
-	•	Internal APIs, analysis tools, or future app versions
-	•	When you need structured metadata (ingredient IDs, external references, etc.)
-
-⸻
-
-📘 Summary
-
-/v1/products/{code} * Simple, flattened product view * Arrays of strings * Current iOS app
-
-/v1/products/{code}/detail * Full structured DTO * Nested objects * Admin tools, future clients
-
-Design Philosophy
-	•	Maintain backward-compatible responses for existing mobile apps.
-	•	Allow gradual evolution toward richer, self-descriptive data models.
-	•	Internally, both endpoints share the same lookup and normalization logic but differ only in serialization.
+Both endpoints share the same lookup + normalization logic; only the response shape differs.
 
 ---
 
-### 🛠 Tech Stack
+## Tech Stack
 
-| Layer | Technology |
-|--------|-------------|
-| Language | Java 17 |
-| Framework | Spring Boot 3.3.x |
-| Database | PostgreSQL 16 |
-| Migrations | Flyway |
-| Containerization | Docker / Docker Compose |
-| API Docs | OpenAPI / Swagger |
-| Logging | JSON + Request ID correlation |
-| Architecture | Modular Hexagonal (Ports & Adapters) |
+| Layer          | Technology                        |
+|----------------|-----------------------------------|
+| Language       | Java 17                           |
+| Framework      | Spring Boot 3.3.x                 |
+| Database       | PostgreSQL 16                     |
+| Migrations     | Flyway                            |
+| Containerization | Docker / Docker Compose        |
+| API Docs       | OpenAPI / Swagger                 |
+| Logging        | Structured logs + Request IDs     |
+| Architecture   | Modular Hexagonal                 |
 
 ---
 
