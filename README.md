@@ -12,7 +12,7 @@
 
 ## Table of Contents
 - [Overview](#overview)
-- [Architecture](#architecture)
+- [System Architecture Diagram](#system-architecture-diagram)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Product API Endpoints](#product-api-endpoints)
