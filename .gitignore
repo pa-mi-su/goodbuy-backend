@@ -1,9 +1,9 @@
 # =========================
 # Build outputs
 # =========================
-/target/
-/build/
-/out/
+target/
+build/
+out/
 
 # =========================
 # Logs and temporary files

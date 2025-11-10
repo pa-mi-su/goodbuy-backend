@@ -194,39 +194,117 @@ SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build
 docker compose logs -f goodbuy-api
 ```
 
-**Rebuild flow**
+**Rebuild flow - nuke and boot fresh against dev**
 
 ```bash
-mvn -q -B -DskipTests clean package -pl goodbuy-api -am
-docker compose build --no-cache goodbuy-api
-docker compose up -d goodbuy-api
-docker compose logs goodbuy-api --tail=200
+# 1) Stop everything
+docker compose down
+
+# 2) Remove ALL volumes (wipes Postgres, caches, etc)
+docker compose down -v
+
+# 3) Make sure you're on dev (which now = refactor branch)
+git status
+# should say: On branch dev / working tree clean
+
+# 4) Build fresh JARs (uses dev code)
+mvn -q -B -DskipTests clean package
+
+# 5) Rebuild images with no cache
+docker compose build --no-cache
+
+# 6) Start stack with dev profile
+SPRING_PROFILES_ACTIVE=dev docker compose up -d
+
+# 7) Tail API logs to confirm migrations + startup
+docker compose logs -f goodbuy-api
 ```
 
 ---
 
 ## Product API Endpoints Overview
 
-GoodBuy exposes two main endpoints under `/v1/products`:
+GoodBuy exposes two main product endpoints under /v1/products.
+They serve different data shapes and use cases.
 
-### `GET /v1/products/{code}` — Simple / Mobile-Friendly
+⸻
 
-Flattened shape for the iOS app.
+GET /v1/products/{code} — Simple / Mobile-Friendly
 
-- `images`: array of URL strings
-- `ingredients`: array of ingredient names
-- Cached for 5 minutes
-- Backward-compatible & lightweight
+This endpoint returns a flattened product view designed for lightweight clients such as the iOS app.
 
-### `GET /v1/products/{code}/detail` — Rich / Future-Oriented
+Example Response:
+{
+  "gtin": "0033200011408",
+  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
+  "brand": "Arm & Hammer",
+  "category": "Baking Soda",
+  "images": [
+    "https://images.ean-db.com/.../0033200011408/..."
+  ],
+  "ingredients": [
+    "Sodium Bicarbonate"
+  ],
+  "claims": [],
+  "hazards": [],
+  "source": "EAN-DB"
+}
 
-Returns full `ProductDetailDto`:
+Key Points
+  • ✅ Shape matches the iOS Product model
+  • images → array of string URLs
+  • ingredients → array of string names
+  • claims / hazards → arrays (currently empty but reserved)
+  • ✅ Cached for 5 min for responsiveness
+  • ✅ Safe, stable contract (no nested DTOs)
+  • 🔄 Internally uses the richer DTO but flattens it for backward compatibility
 
-- Nested image objects (`url`, dimensions, etc.)
-- Nested ingredient objects (ids, external IDs, vegan flags, etc.)
-- Ideal for internal tools / future richer clients
+Intended Use
 
-Both endpoints share the same lookup + normalization logic; only the response shape differs.
+Use this endpoint for:
+  • Mobile and web clients needing fast lookups
+  • Scanning flows where only name, brand, images, and ingredient names are required
+
+⸻
+
+GET /v1/products/{code}/detail — Rich / Developer / Future-Oriented
+
+This endpoint returns the full structured DTO with detailed fields.
+
+Example Response
+
+{
+  "gtin": "0033200011408",
+  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
+  "brand": "Arm & Hammer",
+  "category": "Baking Soda",
+  "images": [
+    { "url": "...", "width": 500, "height": 500 }
+  ],
+  "ingredients": [
+    {
+      "id": "e500-ii",
+      "original": "Sodium Bicarbonate",
+      "canonical": "Baking Soda (Sodium Bicarbonate, E500-ii)",
+      "externalIds": { "cosIng": "37736" },
+      "isVegan": true,
+      "isVegetarian": true
+    }
+  ],
+  "source": "EAN-DB"
+}
+
+Key Points
+  • 🧩 Returns full ProductDetailDto
+  • 📦 Includes nested image and ingredient objects
+  • 💡 Enables future enrichment (toxicity scores, regulation data, etc.)
+  • 🔄 Ideal for dashboards, admin tools, or advanced clients
+
+Intended Use
+
+Use this endpoint for:
+  • Internal APIs, analysis tools, or future app versions
+  • When you need structured metadata (ingredient IDs, external references, etc.)
 
 ---
 
