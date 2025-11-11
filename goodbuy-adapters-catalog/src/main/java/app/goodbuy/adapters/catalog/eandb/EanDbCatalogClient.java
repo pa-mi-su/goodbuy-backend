@@ -1,10 +1,10 @@
 package app.goodbuy.adapters.catalog.eandb;
 
 import app.goodbuy.adapters.catalog.CatalogTransportException;
-import app.goodbuy.adapters.catalog.ExternalCatalogClient;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.dto.ProductDetailDto.ImageDto;
 import app.goodbuy.core.products.dto.ProductDetailDto.IngredientDto;
+import app.goodbuy.core.products.port.ExternalCatalogClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -23,7 +23,8 @@ import java.util.*;
 /**
  * EAN-DB client.
  *
- * Implements ExternalCatalogClient with the rich ProductDetailDto from core.
+ * Implements the core ExternalCatalogClient port with rich ProductDetailDto.
+ * Transport-level errors are logged and surfaced as empty Optional to callers.
  */
 public class EanDbCatalogClient implements ExternalCatalogClient {
 
@@ -38,7 +39,10 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     private final String codeParamKey; // used only when baseUrl isn't /product
     private final String userAgent;
 
-    public EanDbCatalogClient(String baseUrl, String bearerJwt, int connectTimeoutMs, int readTimeoutMs) {
+    public EanDbCatalogClient(String baseUrl,
+                              String bearerJwt,
+                              int connectTimeoutMs,
+                              int readTimeoutMs) {
         this(baseUrl, bearerJwt, connectTimeoutMs, readTimeoutMs,
                 "ean", "GoodBuy-Backend/0.1 (+https://goodbuy.app)");
     }
@@ -49,7 +53,11 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
                               int readTimeoutMs,
                               String codeParamKey,
                               String userAgent) {
-        this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+
+        this.baseUrl = baseUrl.endsWith("/")
+                ? baseUrl.substring(0, baseUrl.length() - 1)
+                : baseUrl;
+
         this.bearerJwt = bearerJwt;
         this.readTimeoutMs = readTimeoutMs;
         this.codeParamKey = (codeParamKey == null || codeParamKey.isBlank()) ? "ean" : codeParamKey;
@@ -61,11 +69,11 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
-    // ExternalCatalogClient
+    // ExternalCatalogClient (port)
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Override
-    public Optional<ProductDetailDto> findByGtin(String gtin14) throws CatalogTransportException {
+    public Optional<ProductDetailDto> findByGtin(String gtin14) {
         try {
             JsonNode product = fetchProductNode(gtin14);
             if (product == null) {
@@ -187,9 +195,13 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
             return Optional.of(out);
 
         } catch (CatalogTransportException e) {
-            throw e;
+            // Transport / HTTP issues → log + surface as cache-miss-style empty
+            log.warn("EAN-DB transport error for gtin14={} : {}", gtin14, e.getMessage());
+            return Optional.empty();
         } catch (Exception e) {
-            throw new CatalogTransportException("catalog_transport_error: " + e.getMessage(), e);
+            // Any unexpected bug while parsing/mapping → don't break callers
+            log.error("Unexpected error when calling EAN-DB for gtin14={}", gtin14, e);
+            return Optional.empty();
         }
     }
 

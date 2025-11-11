@@ -1,5 +1,4 @@
-package app.goodbuy.ingredients.model;
-
+package app.goodbuy.adapters.core.ingredients.model;
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 

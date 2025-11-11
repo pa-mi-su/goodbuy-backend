@@ -1,7 +1,6 @@
 app/goodbuy/adapters/catalog/eansearch/EanSearchClient.class
 app/goodbuy/adapters/catalog/CatalogProperties$Provider.class
 app/goodbuy/adapters/catalog/CatalogProperties$EanDb.class
-app/goodbuy/adapters/catalog/ExternalCatalogClient.class
 app/goodbuy/adapters/catalog/CatalogProperties$EanSearch.class
 app/goodbuy/adapters/catalog/CatalogTransportException.class
 app/goodbuy/adapters/catalog/CatalogProperties.class
