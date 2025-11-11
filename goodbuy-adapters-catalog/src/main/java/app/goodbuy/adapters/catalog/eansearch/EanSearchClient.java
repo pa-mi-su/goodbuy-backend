@@ -1,9 +1,9 @@
 package app.goodbuy.adapters.catalog.eansearch;
 
 import app.goodbuy.adapters.catalog.CatalogTransportException;
-import app.goodbuy.adapters.catalog.ExternalCatalogClient;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.dto.ProductDetailDto.ImageDto;
+import app.goodbuy.core.products.port.ExternalCatalogClient;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -54,7 +54,7 @@ public class EanSearchClient implements ExternalCatalogClient {
     }
 
     @Override
-    public Optional<ProductDetailDto> findByGtin(String gtin14) throws CatalogTransportException {
+    public Optional<ProductDetailDto> findByGtin(String gtin14) {
         // EAN-Search expects EAN-13, not GTIN-14 → drop leading zero if present
         String ean13 = (gtin14 != null && gtin14.length() == 14 && gtin14.startsWith("0"))
                 ? gtin14.substring(1)
@@ -142,9 +142,13 @@ public class EanSearchClient implements ExternalCatalogClient {
             return Optional.of(dto);
 
         } catch (CatalogTransportException e) {
-            throw e;
+            // Adapter-level failure: treat as "no result", don't break the app
+            log.warn("EAN-Search transport error for gtin14={}: {}", gtin14, e.getMessage());
+            return Optional.empty();
         } catch (Exception e) {
-            throw new CatalogTransportException("eansearch_transport: " + e.getMessage(), e);
+            // Any unexpected issue → log + empty
+            log.warn("EAN-Search unexpected error for gtin14={}", gtin14, e);
+            return Optional.empty();
         }
     }
 

@@ -1,5 +1,6 @@
 package app.goodbuy.adapters.catalog;
 
+import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.adapters.catalog.eandb.EanDbCatalogClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

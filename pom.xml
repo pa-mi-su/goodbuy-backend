@@ -17,15 +17,17 @@
     <maven.compiler.release>${java.version}</maven.compiler.release>
   </properties>
 
+  <!-- Multi-module layout -->
   <modules>
     <module>goodbuy-core</module>
-    <module>goodbuy-api</module>
+    <module>goodbuy-adapters-core</module>
     <module>goodbuy-adapters-catalog</module>
+    <module>goodbuy-api</module>
   </modules>
 
-  <!-- Import Spring Boot's managed dependency versions -->
   <dependencyManagement>
     <dependencies>
+      <!-- Spring Boot BOM: manages Spring & friends -->
       <dependency>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-dependencies</artifactId>
@@ -33,13 +35,32 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+
+      <!-- Internal modules: single source of truth for versions -->
+      <dependency>
+        <groupId>app.goodbuy</groupId>
+        <artifactId>goodbuy-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>app.goodbuy</groupId>
+        <artifactId>goodbuy-adapters-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>app.goodbuy</groupId>
+        <artifactId>goodbuy-adapters-catalog</artifactId>
+        <version>${project.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
   <build>
     <pluginManagement>
       <plugins>
-        <!-- Compiler configured once for all modules -->
+        <!-- Use Java 17 across all modules -->
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
@@ -49,7 +70,7 @@
           </configuration>
         </plugin>
 
-        <!-- Spring Boot plugin version aligned with Boot BOM -->
+        <!-- Spring Boot plugin (for goodbuy-api) -->
         <plugin>
           <groupId>org.springframework.boot</groupId>
           <artifactId>spring-boot-maven-plugin</artifactId>
@@ -58,4 +79,5 @@
       </plugins>
     </pluginManagement>
   </build>
+
 </project>
