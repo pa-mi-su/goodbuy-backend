@@ -308,6 +308,56 @@ Use this endpoint for:
 
 ---
 
+## Product Lookup Caching and ETag Revalidation
+
+The GoodBuy platform now implements a multi-layer caching strategy across both the iOS client and the backend API.
+This approach significantly reduces redundant network calls, improves response latency, and maintains consistency between the client and server.
+
+### High-Level Overview
+
+When a product barcode is scanned, the request passes through several cache layers before reaching the external catalog:
+
+iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  External EAN-DB
+↓                     ↓                        ↓
+Immediate hit         304 Not Modified        Remote fetch if cache miss
+
+![Caching Flow](docs/goodbuy_caching_flow_v2.png)
+
+---
+
+### iOS Client Implementation
+
+**Files:** `GoodBuyBackendProvider.swift`, `ResultViewModel.swift`
+
+#### In-Memory TTL Cache (~15 seconds)
+
+- Repeated scans of the same product within approximately 15 seconds are served directly from memory.
+- This layer prevents any network request and provides an instantaneous user experience.
+
+#### System URLCache with ETag Revalidation
+
+- The client relies on the backend’s ETag headers for HTTP revalidation.
+- When a cached item is requested again, iOS automatically includes an `If-None-Match` header.
+- If the ETag matches, the backend returns `304 Not Modified`, and the cached body is reused.
+- If the product has changed, the backend returns `200 OK` with updated data, which the client stores automatically.
+
+---
+
+### Backend Implementation
+
+**File:** `ProductController.java`
+
+#### ETag Support
+
+- Each `/v1/products/{code}` response includes a weak ETag (`W/"sha256…"`) generated from the serialized JSON body.
+- If the client provides `If-None-Match`, the controller compares hashes and returns `304 Not Modified` if the payload is unchanged.
+
+#### Cache-Control Policy
+
+```http
+Cache-Control: public, max-age=300, stale-while-revalidate=60
+---
+
 ## Tech Stack
 
 | Layer          | Technology                        |
