@@ -25,14 +25,14 @@
 
 ## Overview
 
-- **Language:** Java 17  
-- **Framework:** Spring Boot 3.3.x  
-- **Database:** PostgreSQL 16 (Dockerized)  
-- **Migrations:** Flyway (auto-run on startup)  
-- **Docs:** OpenAPI/Swagger (`/v3/api-docs`)  
-- **Profiles:** `dev`, `prod`  
-- **Config:** `.env` + Docker secrets + Spring `application-*.properties`  
-- **Containers:** Docker Compose  
+- **Language:** Java 17
+- **Framework:** Spring Boot 3.3.x
+- **Database:** PostgreSQL 16 (Dockerized)
+- **Migrations:** Flyway (auto-run on startup)
+- **Docs:** OpenAPI/Swagger (`/v3/api-docs`)
+- **Profiles:** `dev`, `prod`
+- **Config:** `.env` + Docker secrets + Spring `application-*.properties`
+- **Containers:** Docker Compose
 
 ---
 
@@ -99,8 +99,8 @@
 
 **End-to-end flow (simplified)**
 
-- iOS → `ProductController` → `ProductService` → `EanDbCatalogClient` → EAN-DB API → `ProductDetailDto` → response to iOS  
-- iOS → `IngredientController` → `IngredientReadService` → `CoreIngredientReadAdapter` → `IngredientRepository` (Postgres) → `IngredientDto` → response to iOS  
+- iOS → `ProductController` → `ProductService` → `EanDbCatalogClient` → EAN-DB API → `ProductDetailDto` → response to iOS
+- iOS → `IngredientController` → `IngredientReadService` → `CoreIngredientReadAdapter` → `IngredientRepository` (Postgres) → `IngredientDto` → response to iOS
 
 ---
 
@@ -164,7 +164,7 @@ goodbuy-backend/
 
 ## Product Lookup Caching and ETag Revalidation
 
-The GoodBuy platform implements a multi-layer caching strategy across both the iOS client and backend API.  
+The GoodBuy platform implements a multi-layer caching strategy across both the iOS client and backend API.
 This reduces redundant network calls, improves performance, and maintains synchronized product data.
 
 ### High-Level Overview
@@ -177,7 +177,7 @@ iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  Exte
   Immediate hit         304 Not Modified        Remote fetch if cache miss
 ```
 
-![Caching Flow](docs/goodbuy_caching_flow_v2.png)
+![Caching Flow](goodbuy_caching_flow_v2.png)
 
 ---
 
@@ -186,13 +186,13 @@ iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  Exte
 **Files:** `GoodBuyBackendProvider.swift`, `ResultViewModel.swift`
 
 #### In-Memory TTL Cache (~15 seconds)
-- Rapid re-scans of the same product (within ~15s) are served from memory.  
+- Rapid re-scans of the same product (within ~15s) are served from memory.
 - No network call is made, providing a zero-latency experience.
 
 #### System URLCache with ETag Revalidation
-- Relies on backend `ETag` headers for conditional requests.  
-- Uses `If-None-Match` for revalidation.  
-- `304 Not Modified` → reuse cached body.  
+- Relies on backend `ETag` headers for conditional requests.
+- Uses `If-None-Match` for revalidation.
+- `304 Not Modified` → reuse cached body.
 - `200 OK` → update cache automatically.
 
 ---
@@ -202,7 +202,7 @@ iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  Exte
 **File:** `ProductController.java`
 
 #### ETag Support
-- Each `/v1/products/{code}` response includes a weak ETag (`W/"sha256…"`) derived from the JSON body.  
+- Each `/v1/products/{code}` response includes a weak ETag (`W/"sha256…"`) derived from the JSON body.
 - If the client provides `If-None-Match`, a matching hash returns `304 Not Modified`.
 
 #### Cache-Control Policy
@@ -211,21 +211,21 @@ iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  Exte
 Cache-Control: public, max-age=300, stale-while-revalidate=60
 ```
 
-- Cached responses remain valid for 5 minutes and support background revalidation.  
+- Cached responses remain valid for 5 minutes and support background revalidation.
 - Reduces redundant API calls while maintaining up-to-date content.
 
 #### Backend Product Cache
-- The backend caches product DTOs in memory (or Redis).  
+- The backend caches product DTOs in memory (or Redis).
 - Cache hits are served instantly; misses fetch from EAN-DB and are stored for reuse.
 
 ---
 
 ### Benefits
 
-- **Improved performance:** Same-product re-scans typically <50 ms  
-- **Reduced load:** Requests often resolve via cache or `304`  
-- **Smart freshness:** Cached data auto-refreshes via ETags  
-- **Consistency:** Client and server remain synchronized efficiently  
+- **Improved performance:** Same-product re-scans typically <50 ms
+- **Reduced load:** Requests often resolve via cache or `304`
+- **Smart freshness:** Cached data auto-refreshes via ETags
+- **Consistency:** Client and server remain synchronized efficiently
 
 ---
 
