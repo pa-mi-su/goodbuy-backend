@@ -1,4 +1,5 @@
 app/goodbuy/core/products/util/BarcodeNormalizer.class
+app/goodbuy/core/products/port/ProductCachePort.class
 app/goodbuy/core/ingredients/dto/IngredientDTO.class
 app/goodbuy/core/products/dto/ProductDetailDto$IngredientDto.class
 app/goodbuy/core/products/dto/ProductDetailDto$ImageDto.class

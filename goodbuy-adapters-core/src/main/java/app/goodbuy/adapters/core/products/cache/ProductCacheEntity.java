@@ -3,102 +3,62 @@ package app.goodbuy.adapters.core.products.cache;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import java.time.Instant;
 
-/**
- * JPA entity for locally cached product data.
- *
- * For now this is intentionally simple:
- *  - gtin: primary key (GTIN-14)
- *  - basic fields for quick querying
- *  - rawJson: full serialized ProductDetailDto for flexibility
- *
- * Later we can normalize images/ingredients if needed.
- */
 @Entity
 @Table(name = "product_cache")
 public class ProductCacheEntity {
 
     @Id
-    @Column(name = "gtin", length = 14, nullable = false, updatable = false)
+    @Column(name = "gtin", nullable = false, length = 32)
     private String gtin;
 
-    @Column(name = "name", length = 512)
-    private String name;
-
-    @Column(name = "brand", length = 256)
-    private String brand;
-
-    @Column(name = "category", length = 256)
-    private String category;
+    @Column(name = "json_payload", nullable = false, columnDefinition = "TEXT")
+    private String jsonPayload;
 
     @Column(name = "source", length = 64)
-    private String source; // e.g. "EAN-DB", "EAN-SEARCH"
+    private String source;
 
-    @Lob
-    @Column(name = "raw_json", nullable = false)
-    private String rawJson; // serialized ProductDetailDto
+    // Handled by DB default (NOW()) — not by JPA
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private Instant createdAt;
 
-    // JPA requires a no-arg constructor
-    protected ProductCacheEntity() {
-    }
+    // Handled by DB trigger (updated_at = NOW()) — not by JPA
+    @Column(name = "updated_at", insertable = false, updatable = false)
+    private Instant updatedAt;
 
-    public ProductCacheEntity(String gtin,
-                              String name,
-                              String brand,
-                              String category,
-                              String source,
-                              String rawJson) {
-        this.gtin = gtin;
-        this.name = name;
-        this.brand = brand;
-        this.category = category;
-        this.source = source;
-        this.rawJson = rawJson;
-    }
+    // ── Getters & Setters ───────────────────────────────────────────────
 
     public String getGtin() {
         return gtin;
     }
 
-    public String getName() {
-        return name;
+    public void setGtin(String gtin) {
+        this.gtin = gtin;
     }
 
-    public String getBrand() {
-        return brand;
+    public String getJsonPayload() {
+        return jsonPayload;
     }
 
-    public String getCategory() {
-        return category;
+    public void setJsonPayload(String jsonPayload) {
+        this.jsonPayload = jsonPayload;
     }
 
     public String getSource() {
         return source;
     }
 
-    public String getRawJson() {
-        return rawJson;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public void setBrand(String brand) {
-        this.brand = brand;
-    }
-
-    public void setCategory(String category) {
-        this.category = category;
-    }
-
     public void setSource(String source) {
         this.source = source;
     }
 
-    public void setRawJson(String rawJson) {
-        this.rawJson = rawJson;
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
     }
 }
