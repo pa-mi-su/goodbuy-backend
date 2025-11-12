@@ -1,5 +1,6 @@
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/ingredients/port/IngredientReadPort.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/ingredients/dto/IngredientDTO.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/dto/ProductDetailDto.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/port/ProductCachePort.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/util/BarcodeNormalizer.java
 /Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/port/ExternalCatalogClient.java

@@ -16,7 +16,8 @@
 - [System Architecture Diagram](#system-architecture-diagram)
 - [Project Structure](#project-structure)
 - [Logging and Running](#logging-and-running)
-- [Product API Endpoints](#product-api-endpoints-overview)
+- [Product API Endpoints Overview](#product-api-endpoints-overview)
+- [Product Lookup Caching and ETag Revalidation](#product-lookup-caching-and-etag-revalidation)
 - [Tech Stack](#tech-stack)
 - [License](#license)
 
@@ -159,167 +160,87 @@ goodbuy-backend/
       └─ V3__hazards_table.sql
 ```
 
-### Module Overview
+---
 
-The project uses a **modular, hexagonal architecture**:
+## Product Lookup Caching and ETag Revalidation
 
-- **goodbuy-api** – HTTP edge: controllers, filters, configs. Talks only to services/ports.
-- **goodbuy-core** – Domain contracts + DTOs. No framework dependencies.
-- **goodbuy-adapters-catalog** – External API clients implementing `ExternalCatalogClient`.
-- **goodbuy-adapters-core** – Postgres adapter implementing `IngredientReadPort`.
-- **goodbuy-migrations** – Flyway migrations for schema.
+The GoodBuy platform implements a multi-layer caching strategy across both the iOS client and backend API.
+This reduces redundant network calls, improves performance, and maintains synchronized product data.
+
+### High-Level Overview
+
+When a product is scanned:
+
+```
+iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  External EAN-DB
+       ↓                     ↓                        ↓
+  Immediate hit         304 Not Modified        Remote fetch if cache miss
+```
+
+![Caching Flow](goodbuy_caching_flow_v2.png)
 
 ---
 
-## Logging and Running
+### iOS Client Implementation
 
-**Dev**
+**Files:** `GoodBuyBackendProvider.swift`, `ResultViewModel.swift`
 
-```bash
-SPRING_PROFILES_ACTIVE=dev docker compose up -d --build
-docker compose logs -f goodbuy-api
-```
+#### In-Memory TTL Cache (~15 seconds)
+- Rapid re-scans of the same product (within ~15s) are served from memory.
+- No network call is made, providing a zero-latency experience.
 
-**Prod**
-
-```bash
-SPRING_PROFILES_ACTIVE=prod docker compose up -d --build
-docker compose logs -f goodbuy-api
-```
-
-**Prod (JSON logs)**
-
-```bash
-SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build
-docker compose logs -f goodbuy-api
-```
-
-**Rebuild flow - nuke and boot fresh against dev**
-
-```bash
-# 1) Stop everything
-docker compose down
-
-# 2) Remove ALL volumes (wipes Postgres, caches, etc)
-docker compose down -v
-
-# 3) Make sure you're on dev (which now = refactor branch)
-git status
-# should say: On branch dev / working tree clean
-
-# 4) Build fresh JARs (uses dev code)
-mvn -q -B -DskipTests clean package
-
-# 5) Rebuild images with no cache
-docker compose build --no-cache
-
-# 6) Start stack with dev profile
-SPRING_PROFILES_ACTIVE=dev docker compose up -d
-
-# 7) Tail API logs to confirm migrations + startup
-docker compose logs -f goodbuy-api
-```
+#### System URLCache with ETag Revalidation
+- Relies on backend `ETag` headers for conditional requests.
+- Uses `If-None-Match` for revalidation.
+- `304 Not Modified` → reuse cached body.
+- `200 OK` → update cache automatically.
 
 ---
 
-## Product API Endpoints Overview
+### Backend Implementation
 
-GoodBuy exposes two main product endpoints under /v1/products.
-They serve different data shapes and use cases.
+**File:** `ProductController.java`
 
-⸻
+#### ETag Support
+- Each `/v1/products/{code}` response includes a weak ETag (`W/"sha256…"`) derived from the JSON body.
+- If the client provides `If-None-Match`, a matching hash returns `304 Not Modified`.
 
-GET /v1/products/{code} — Simple / Mobile-Friendly
+#### Cache-Control Policy
 
-This endpoint returns a flattened product view designed for lightweight clients such as the iOS app.
+```http
+Cache-Control: public, max-age=300, stale-while-revalidate=60
+```
 
-Example Response:
-{
-  "gtin": "0033200011408",
-  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
-  "brand": "Arm & Hammer",
-  "category": "Baking Soda",
-  "images": [
-    "https://images.ean-db.com/.../0033200011408/..."
-  ],
-  "ingredients": [
-    "Sodium Bicarbonate"
-  ],
-  "claims": [],
-  "hazards": [],
-  "source": "EAN-DB"
-}
+- Cached responses remain valid for 5 minutes and support background revalidation.
+- Reduces redundant API calls while maintaining up-to-date content.
 
-Key Points
-  • ✅ Shape matches the iOS Product model
-  • images → array of string URLs
-  • ingredients → array of string names
-  • claims / hazards → arrays (currently empty but reserved)
-  • ✅ Cached for 5 min for responsiveness
-  • ✅ Safe, stable contract (no nested DTOs)
-  • 🔄 Internally uses the richer DTO but flattens it for backward compatibility
+#### Backend Product Cache
+- The backend caches product DTOs in memory (or Redis).
+- Cache hits are served instantly; misses fetch from EAN-DB and are stored for reuse.
 
-Intended Use
+---
 
-Use this endpoint for:
-  • Mobile and web clients needing fast lookups
-  • Scanning flows where only name, brand, images, and ingredient names are required
+### Benefits
 
-⸻
-
-GET /v1/products/{code}/detail — Rich / Developer / Future-Oriented
-
-This endpoint returns the full structured DTO with detailed fields.
-
-Example Response
-
-{
-  "gtin": "0033200011408",
-  "name": "Arm & Hammer Pure Baking Soda, 2 Lb Box",
-  "brand": "Arm & Hammer",
-  "category": "Baking Soda",
-  "images": [
-    { "url": "...", "width": 500, "height": 500 }
-  ],
-  "ingredients": [
-    {
-      "id": "e500-ii",
-      "original": "Sodium Bicarbonate",
-      "canonical": "Baking Soda (Sodium Bicarbonate, E500-ii)",
-      "externalIds": { "cosIng": "37736" },
-      "isVegan": true,
-      "isVegetarian": true
-    }
-  ],
-  "source": "EAN-DB"
-}
-
-Key Points
-  • 🧩 Returns full ProductDetailDto
-  • 📦 Includes nested image and ingredient objects
-  • 💡 Enables future enrichment (toxicity scores, regulation data, etc.)
-  • 🔄 Ideal for dashboards, admin tools, or advanced clients
-
-Intended Use
-
-Use this endpoint for:
-  • Internal APIs, analysis tools, or future app versions
-  • When you need structured metadata (ingredient IDs, external references, etc.)
+- **Improved performance:** Same-product re-scans typically <50 ms
+- **Reduced load:** Requests often resolve via cache or `304`
+- **Smart freshness:** Cached data auto-refreshes via ETags
+- **Consistency:** Client and server remain synchronized efficiently
 
 ---
 
 ## Tech Stack
 
-| Layer          | Technology                        |
-|----------------|-----------------------------------|
-| Language       | Java 17                           |
-| Framework      | Spring Boot 3.3.x                 |
-| Database       | PostgreSQL 16                     |
-| Migrations     | Flyway                            |
+| Layer            | Technology                     |
+|------------------|--------------------------------|
+| Language         | Java 17                        |
+| Framework        | Spring Boot 3.3.x              |
+| Database         | PostgreSQL 16                  |
+| Migrations       | Flyway                         |
 | Containerization | Docker / Docker Compose        |
-| API Docs       | OpenAPI / Swagger                 |
-| Logging        | Structured logs + Request IDs     |
-| Architecture   | Modular Hexagonal                 |
+| API Docs         | OpenAPI / Swagger              |
+| Logging          | Structured logs + Request IDs  |
+| Architecture     | Modular Hexagonal              |
 
 ---
 
