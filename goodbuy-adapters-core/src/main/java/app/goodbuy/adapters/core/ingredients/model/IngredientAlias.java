@@ -1,4 +1,5 @@
 package app.goodbuy.adapters.core.ingredients.model;
+
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 
@@ -30,9 +31,26 @@ public class IngredientAlias {
         if (alias != null) alias = alias.trim();
     }
 
+    // ───────────────────────────────────────────────────────────────
     // Getters
+    // ───────────────────────────────────────────────────────────────
     public Long getId() { return id; }
     public Ingredient getIngredient() { return ingredient; }
     public String getAlias() { return alias; }
     public OffsetDateTime getCreatedAt() { return createdAt; }
+
+    // ───────────────────────────────────────────────────────────────
+    // Setters (NEW, safe, needed for mapping)
+    // ───────────────────────────────────────────────────────────────
+    public void setIngredient(Ingredient ingredient) {
+        this.ingredient = ingredient;
+    }
+
+    public void setAlias(String alias) {
+        this.alias = alias;
+    }
+
+    public void setCreatedAt(OffsetDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
 }

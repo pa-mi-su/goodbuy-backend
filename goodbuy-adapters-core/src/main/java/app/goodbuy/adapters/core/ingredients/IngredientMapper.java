@@ -19,7 +19,7 @@ public class IngredientMapper {
             return null;
         }
 
-        // Aliases -> List<String>, very defensive so it always compiles.
+        // Aliases -> List<String>
         List<String> aliases = (entity.getAliases() == null)
                 ? List.of()
                 : entity.getAliases().stream()
@@ -39,7 +39,7 @@ public class IngredientMapper {
         String displayName = entity.getDisplayName();
         String summary = entity.getSummary();
         String description = entity.getDescription();
-        String func = null; // set if you have a func field
+        String func = null; // set if you have a func field on entity
         String concerns = entity.getConcerns();
         BigDecimal safetyScore = entity.getSafetyScore();
         String ratingLetter = entity.getRatingLetter();
@@ -80,10 +80,7 @@ public class IngredientMapper {
 
     private String aliasToString(IngredientAlias alias) {
         if (alias == null) return null;
-
-        // Minimal, always-safe version: rely on toString()
-        // If your entity has getName() or getAlias(), you can swap this later.
-        return alias.toString();
+        return alias.getAlias();   // <<< FIXED HERE
     }
 
     // Helper to avoid compile errors if getTags() doesn't exist.
