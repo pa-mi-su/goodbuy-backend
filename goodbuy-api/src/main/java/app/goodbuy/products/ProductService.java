@@ -2,7 +2,8 @@ package app.goodbuy.products;
 
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
-import app.goodbuy.core.products.port.ProductCachePort;
+import app.goodbuy.core.products.port.ProductLookupPort;
+import app.goodbuy.core.products.port.ProductSnapshotPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -16,21 +17,21 @@ public class ProductService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductService.class);
 
-    /**
-     * Optional external catalog client (EAN-DB, EAN-Search, etc.).
-     */
-    private final ExternalCatalogClient external; // may be null
+    /** Optional external catalog client (EAN-DB, EAN-Search, etc.). */
+    private final ExternalCatalogClient external;        // may be null
 
-    /**
-     * Optional DB-backed product cache.
-     * Implemented by ProductCacheAdapter in goodbuy-adapters-core.
-     */
-    private final ProductCachePort cache; // may be null
+    /** Optional GoodBuy DB lookup (products + product_ingredients + ingredients). */
+    private final ProductLookupPort lookup;              // may be null
+
+    /** Optional snapshot writer into GoodBuy DB (products + product_ingredients). */
+    private final ProductSnapshotPort snapshot;          // may be null
 
     public ProductService(Optional<ExternalCatalogClient> external,
-                          Optional<ProductCachePort> cache) {
+                          Optional<ProductLookupPort> lookup,
+                          Optional<ProductSnapshotPort> snapshot) {
         this.external = external.orElse(null);
-        this.cache = cache.orElse(null);
+        this.lookup = lookup.orElse(null);
+        this.snapshot = snapshot.orElse(null);
 
         if (this.external != null) {
             log.info("catalog client wired: {}", this.external.getClass().getName());
@@ -38,14 +39,20 @@ public class ProductService {
             log.info("no external catalog client configured; running without external catalog");
         }
 
-        if (this.cache != null) {
-            log.info("product cache wired: {}", this.cache.getClass().getName());
+        if (this.lookup != null) {
+            log.info("product lookup wired: {}", this.lookup.getClass().getName());
         } else {
-            log.info("no product cache configured; running cacheless");
+            log.info("no GoodBuy product lookup configured; will skip DB-first lookup");
+        }
+
+        if (this.snapshot != null) {
+            log.info("product snapshot wired: {}", this.snapshot.getClass().getName());
+        } else {
+            log.info("no product snapshot configured; external hits will NOT be persisted");
         }
     }
 
-    /** Human-friendly provider name for logs & responses. */
+    /** Human-friendly provider name for logs & error responses (external side). */
     public String activeSourceName() {
         if (external == null) {
             return "internal";
@@ -57,12 +64,12 @@ public class ProductService {
     }
 
     /**
-     * Main lookup flow (used by simple product endpoint).
+     * Main lookup flow (simple product endpoint).
      *
      * 1) Normalize GTIN.
-     * 2) Try database cache.
-     * 3) If cache miss → call external.
-     * 4) If external hit → persist into cache (best-effort).
+     * 2) Try GoodBuy DB (products + product_ingredients + ingredients).
+     * 3) If DB miss → call external.
+     * 4) If external hit → persist snapshot into GoodBuy DB (best-effort).
      */
     public ProductDetailDto getByGtinOrNull(String gtin14) {
         String code = normalize(gtin14);
@@ -70,54 +77,53 @@ public class ProductService {
             return null;
         }
 
-        // 1) Try cache first
-        ProductDetailDto cached = tryCacheHit(code);
-        if (cached != null) {
-            return cached;
+        // 1) Try GoodBuy DB first (our own master product + ingredient links)
+        ProductDetailDto fromDb = tryDbLookup(code);
+        if (fromDb != null) {
+            return fromDb;
         }
 
-        // 2) Fallback to external
+        // 2) Fallback to external catalog (EAN-DB, etc.)
         ProductDetailDto fromExternal = fetchFromExternalOrNull(code);
 
-        // 3) On success, write-through into cache (non-fatal if it fails)
+        // 3) On success, snapshot into GoodBuy DB (non-fatal if it fails)
         if (fromExternal != null) {
-            tryCacheSave(fromExternal);
+            trySnapshotSave(fromExternal);
         }
 
         return fromExternal;
     }
 
-    /**
-     * Rich detail lookup.
-     * For now uses the same flow as getByGtinOrNull, since ProductDetailDto is already rich.
-     */
+    /** Rich detail lookup: for now same flow as simple lookup. */
     public ProductDetailDto getDetailByGtinOrNull(String gtin14) {
         return getByGtinOrNull(gtin14);
     }
 
     // ── internal helpers ───────────────────────────────────────────────────────
 
-    private ProductDetailDto tryCacheHit(String code) {
-        if (cache == null) {
+    private ProductDetailDto tryDbLookup(String code) {
+        if (lookup == null) {
             return null;
         }
         try {
-            Optional<ProductDetailDto> opt = cache.findByGtin(code);
+            Optional<ProductDetailDto> opt = lookup.findByGtin(code);
             if (opt.isPresent()) {
                 ProductDetailDto dto = opt.get();
-                log.info("product-cache hit gtin14={} source={}", code, safe(dto.source()));
+                log.info("goodbuy-db hit gtin14={} name={} brand={}",
+                        code, safe(dto.name()), safe(dto.brand()));
                 return dto;
             }
-            log.debug("product-cache miss gtin14={}", code);
+            log.debug("goodbuy-db miss gtin14={}", code);
             return null;
         } catch (Exception e) {
-            log.warn("product-cache error on get gtin14={} msg={}", code, e.getMessage());
-            return null; // never break request due to cache
+            log.warn("goodbuy-db error on get gtin14={} msg={}", code, e.getMessage());
+            // Never break the request because our internal lookup failed
+            return null;
         }
     }
 
-    private void tryCacheSave(ProductDetailDto dto) {
-        if (cache == null || dto == null) {
+    private void trySnapshotSave(ProductDetailDto dto) {
+        if (snapshot == null || dto == null) {
             return;
         }
         String gtin = dto.gtin();
@@ -126,9 +132,10 @@ public class ProductService {
         }
 
         try {
-            cache.save(dto);
+            snapshot.saveSnapshot(dto);
         } catch (Exception e) {
-            log.warn("product-cache error on save gtin14={} msg={}", gtin, e.getMessage());
+            // Non-fatal: the user still gets the external product; we just failed to persist it.
+            log.warn("goodbuy-db error on snapshot gtin14={} msg={}", gtin, e.getMessage());
         }
     }
 
