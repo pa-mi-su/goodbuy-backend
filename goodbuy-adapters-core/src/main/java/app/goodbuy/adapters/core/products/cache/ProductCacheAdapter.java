@@ -2,6 +2,7 @@ package app.goodbuy.adapters.core.products.cache;
 
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductCachePort;
+import app.goodbuy.core.products.port.ProductSnapshotPort;
 import app.goodbuy.core.products.util.BarcodeNormalizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -18,6 +19,11 @@ import java.util.Optional;
  * - READ: best-effort, invalid/undecodable entries are ignored.
  * - WRITE: best-effort, failures never break the main flow.
  * - Keys are canonical GTIN-14 using BarcodeNormalizer.
+ *
+ * Additionally, on successful cache save, it forwards the DTO to ProductSnapshotPort
+ * so we can persist a normalized snapshot into:
+ *   - products
+ *   - product_ingredients
  */
 @Component
 public class ProductCacheAdapter implements ProductCachePort {
@@ -27,15 +33,21 @@ public class ProductCacheAdapter implements ProductCachePort {
     private final ProductCacheRepository repo;
     private final ObjectMapper objectMapper;
     private final BarcodeNormalizer barcodeNormalizer;
+    private final ProductSnapshotPort snapshotPort;   // <-- new
 
     public ProductCacheAdapter(
             ProductCacheRepository repo,
             ObjectMapper objectMapper,
-            BarcodeNormalizer barcodeNormalizer
+            BarcodeNormalizer barcodeNormalizer,
+            ProductSnapshotPort snapshotPort
     ) {
         this.repo = repo;
         this.objectMapper = objectMapper;
         this.barcodeNormalizer = barcodeNormalizer;
+        this.snapshotPort = snapshotPort;
+
+        log.info("product-cache: ProductSnapshotPort wired: {}",
+                snapshotPort != null ? snapshotPort.getClass().getName() : "null");
     }
 
     @Override
@@ -75,6 +87,10 @@ public class ProductCacheAdapter implements ProductCachePort {
     /**
      * Save DTO into cache and return it (per ProductCachePort contract).
      * Any persistence error is logged and ignored.
+     *
+     * Also forwards the DTO to ProductSnapshotPort so we can:
+     *   - upsert into products
+     *   - rebuild product_ingredients links
      */
     @Override
     public ProductDetailDto save(ProductDetailDto dto) {
@@ -88,6 +104,7 @@ public class ProductCacheAdapter implements ProductCachePort {
             return dto;
         }
 
+        // 1) Store JSON into product_cache (best-effort)
         try {
             String json = objectMapper.writeValueAsString(dto);
 
@@ -101,6 +118,18 @@ public class ProductCacheAdapter implements ProductCachePort {
         } catch (Exception e) {
             // DO NOT break requests on cache failure
             log.warn("product-cache: failed to store GTIN={} (non-fatal): {}", key, e.getMessage());
+        }
+
+        // 2) Forward to snapshot adapter (also best-effort)
+        try {
+            if (snapshotPort != null) {
+                snapshotPort.saveSnapshot(dto);
+            } else {
+                log.debug("product-cache: snapshotPort is null, skipping snapshot for GTIN={}", key);
+            }
+        } catch (Exception e) {
+            // Again, never break the main request due to snapshot issues
+            log.warn("product-cache: failed to snapshot GTIN={} (non-fatal): {}", key, e.getMessage());
         }
 
         return dto;

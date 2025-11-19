@@ -33,4 +33,12 @@ public interface IngredientRepository extends JpaRepository<Ingredient, Long> {
        or lower(a.alias) in :needles
     """)
     List<Ingredient> findManyByNamesOrAliases(@Param("needles") Collection<String> needles);
+
+    /**
+     * Direct lookup by canonicalKey (case-insensitive).
+     *
+     * Used by DbProductSnapshotAdapter when wiring ingredient links
+     * from EAN-DB ingredient names into our GoodBuy ingredients table.
+     */
+    Optional<Ingredient> findByCanonicalKeyIgnoreCase(String canonicalKey);
 }

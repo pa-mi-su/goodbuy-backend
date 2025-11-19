@@ -1,8 +1,13 @@
 app/goodbuy/core/products/util/BarcodeNormalizer.class
-app/goodbuy/core/products/port/ProductCachePort.class
 app/goodbuy/core/ingredients/dto/IngredientDTO.class
 app/goodbuy/core/products/dto/ProductDetailDto$IngredientDto.class
 app/goodbuy/core/products/dto/ProductDetailDto$ImageDto.class
-app/goodbuy/core/products/port/ExternalCatalogClient.class
 app/goodbuy/core/products/dto/ProductDetailDto.class
 app/goodbuy/core/ingredients/port/IngredientReadPort.class
+app/goodbuy/core/products/port/ProductCachePort.class
+app/goodbuy/core/notifications/NotificationPort.class
+app/goodbuy/core/products/port/ProductSnapshotPort.class
+app/goodbuy/core/ingredients/dto/MissingIngredientReportRequest.class
+app/goodbuy/core/notifications/SlackMissingIngredientNotifier.class
+app/goodbuy/core/products/port/ExternalCatalogClient.class
+app/goodbuy/adapters/core/notifications/LoggingSlackMissingIngredientNotifier.class
