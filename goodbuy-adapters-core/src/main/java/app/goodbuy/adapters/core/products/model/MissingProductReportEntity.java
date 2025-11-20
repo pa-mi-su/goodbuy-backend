@@ -20,21 +20,15 @@ public class MissingProductReportEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /**
-     * The scanned product code. EAN/GTIN/UPC etc.
-     */
+    /** The scanned product code. EAN/GTIN/UPC etc. */
     @Column(nullable = false, length = 32)
     private String ean;
 
-    /**
-     * Optional free-text name as seen in the client (if any).
-     */
+    /** Optional free-text name as seen in the client (if any). */
     @Column(length = 255)
     private String productName;
 
-    /**
-     * Optional brand string.
-     */
+    /** Optional brand string. */
     @Column(length = 255)
     private String brand;
 
@@ -46,6 +40,13 @@ public class MissingProductReportEntity {
 
     @Column(columnDefinition = "text")
     private String notes;
+
+    /** S3 URLs for user-submitted photos */
+    @Column(name = "front_image_s3_url")
+    private String frontImageS3Url;
+
+    @Column(name = "back_image_s3_url")
+    private String backImageS3Url;
 
     @Column(nullable = false)
     private OffsetDateTime occurredAt;
@@ -65,71 +66,35 @@ public class MissingProductReportEntity {
 
     // ───── getters & setters ─────
 
-    public Long getId() {
-        return id;
-    }
+    public Long getId() { return id; }
 
-    public String getEan() {
-        return ean;
-    }
+    public String getEan() { return ean; }
+    public void setEan(String ean) { this.ean = ean; }
 
-    public void setEan(String ean) {
-        this.ean = ean;
-    }
+    public String getProductName() { return productName; }
+    public void setProductName(String productName) { this.productName = productName; }
 
-    public String getProductName() {
-        return productName;
-    }
+    public String getBrand() { return brand; }
+    public void setBrand(String brand) { this.brand = brand; }
 
-    public void setProductName(String productName) {
-        this.productName = productName;
-    }
+    public String getAppVersion() { return appVersion; }
+    public void setAppVersion(String appVersion) { this.appVersion = appVersion; }
 
-    public String getBrand() {
-        return brand;
-    }
+    public String getPlatform() { return platform; }
+    public void setPlatform(String platform) { this.platform = platform; }
 
-    public void setBrand(String brand) {
-        this.brand = brand;
-    }
+    public String getNotes() { return notes; }
+    public void setNotes(String notes) { this.notes = notes; }
 
-    public String getAppVersion() {
-        return appVersion;
-    }
+    public String getFrontImageS3Url() { return frontImageS3Url; }
+    public void setFrontImageS3Url(String frontImageS3Url) { this.frontImageS3Url = frontImageS3Url; }
 
-    public void setAppVersion(String appVersion) {
-        this.appVersion = appVersion;
-    }
+    public String getBackImageS3Url() { return backImageS3Url; }
+    public void setBackImageS3Url(String backImageS3Url) { this.backImageS3Url = backImageS3Url; }
 
-    public String getPlatform() {
-        return platform;
-    }
+    public OffsetDateTime getOccurredAt() { return occurredAt; }
+    public void setOccurredAt(OffsetDateTime occurredAt) { this.occurredAt = occurredAt; }
 
-    public void setPlatform(String platform) {
-        this.platform = platform;
-    }
-
-    public String getNotes() {
-        return notes;
-    }
-
-    public void setNotes(String notes) {
-        this.notes = notes;
-    }
-
-    public OffsetDateTime getOccurredAt() {
-        return occurredAt;
-    }
-
-    public void setOccurredAt(OffsetDateTime occurredAt) {
-        this.occurredAt = occurredAt;
-    }
-
-    public OffsetDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(OffsetDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
+    public OffsetDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
 }
