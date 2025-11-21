@@ -1,6 +1,5 @@
 package app.goodbuy.adapters.core.products.lookup;
 
-import app.goodbuy.adapters.core.ingredients.IngredientRepository;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.repo.ProductRepository;
 import app.goodbuy.core.products.dto.ProductDetailDto;
@@ -13,10 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 @Component
 public class DbProductLookupAdapter implements ProductLookupPort {
@@ -24,14 +20,11 @@ public class DbProductLookupAdapter implements ProductLookupPort {
     private static final Logger log = LoggerFactory.getLogger(DbProductLookupAdapter.class);
 
     private final ProductRepository productRepo;
-    private final IngredientRepository ingredientRepo;
     private final JdbcTemplate jdbcTemplate;
 
     public DbProductLookupAdapter(ProductRepository productRepo,
-                                  IngredientRepository ingredientRepo,
                                   JdbcTemplate jdbcTemplate) {
         this.productRepo = productRepo;
-        this.ingredientRepo = ingredientRepo;
         this.jdbcTemplate = jdbcTemplate;
     }
 
@@ -59,13 +52,17 @@ public class DbProductLookupAdapter implements ProductLookupPort {
 
         // 2) Load linked ingredients via product_ingredients + ingredients
         List<ProductDetailDto.IngredientDto> ingredientDtos = loadIngredientDtosForProduct(product.getId());
+        log.info("DbProductLookupAdapter.findByGtin: loaded {} ingredient link(s) for product_id={}",
+                ingredientDtos.size(), product.getId());
 
-        // 3) Map to ProductDetailDto
+        // 3) Map to ProductDetailDto (GoodBuy-only snapshot)
         ProductDetailDto dto = toDto(product, ingredientDtos);
 
         return Optional.of(dto);
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // INGREDIENT LOADING
     // ───────────────────────────────────────────────────────────────────────────
 
     private List<ProductDetailDto.IngredientDto> loadIngredientDtosForProduct(Long productId) {
@@ -88,15 +85,15 @@ public class DbProductLookupAdapter implements ProductLookupPort {
         String canonicalKey    = rs.getString("canonical_key");
         String ingredientName  = rs.getString("ingredient_display_name");
 
-        // This is the name shown next to the leaf in iOS.
+        // original = what we showed on label for this product (best-effort)
         String original = firstNonBlank(piDisplayName, ingredientName, canonicalKey);
-        // Canonical = GoodBuy's normalized / display name.
+        // canonical = GoodBuy’s normalized name
         String canonical = firstNonBlank(ingredientName, canonicalKey);
 
-        // Our GoodBuy ingredient ID = canonical_key (stable key)
+        // GoodBuy ingredient ID = canonical_key (stable internal key)
         String id = canonicalKey;
 
-        // No external IDs / vegan flags yet → keep null/empty for now
+        // No external IDs / vegan flags from DB lookup path (handled elsewhere if needed)
         Map<String, String> externalIds = Collections.emptyMap();
         Boolean isVegan = null;
         Boolean isVegetarian = null;
@@ -111,20 +108,29 @@ public class DbProductLookupAdapter implements ProductLookupPort {
         );
     }
 
+    // ───────────────────────────────────────────────────────────────────────────
+    // MAIN DTO MAPPER
+    // ───────────────────────────────────────────────────────────────────────────
+
     private ProductDetailDto toDto(ProductEntity product,
                                    List<ProductDetailDto.IngredientDto> ingredientDtos) {
 
-        // Single primary image → map into one ImageDto if present
+        // Prefer our S3-hosted image; fall back to legacy URL if needed
+        String imageUrl = firstNonBlank(
+                product.getPrimaryImageS3Url(),
+                product.getPrimaryImageUrl()
+        );
+
         List<ProductDetailDto.ImageDto> images = Collections.emptyList();
-        if (product.getPrimaryImageUrl() != null && !product.getPrimaryImageUrl().isBlank()) {
+        if (imageUrl != null) {
             images = List.of(new ProductDetailDto.ImageDto(
-                    product.getPrimaryImageUrl().trim(),
+                    imageUrl,
                     null,
                     null
             ));
         }
 
-        // titles / manufacturer not modeled yet → empty maps
+        // titles / manufacturer not modeled in DB yet
         Map<String, String> titles = Collections.emptyMap();
         Map<String, String> manufacturer = Collections.emptyMap();
 
@@ -138,12 +144,12 @@ public class DbProductLookupAdapter implements ProductLookupPort {
                 ingredientDtos,
                 titles,
                 manufacturer,
-                "GOODBUY-DB"   // mark this as coming from our own DB
+                "GOODBUY-DB"   // clearly mark this as our own DB snapshot
         );
     }
 
     // ───────────────────────────────────────────────────────────────────────────
-    // Helpers
+    // HELPERS
     // ───────────────────────────────────────────────────────────────────────────
 
     private static String firstNonBlank(String... values) {

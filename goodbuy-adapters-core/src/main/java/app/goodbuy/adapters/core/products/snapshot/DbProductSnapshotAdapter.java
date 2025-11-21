@@ -8,11 +8,18 @@ import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
 import app.goodbuy.adapters.core.products.repo.ProductRepository;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
+import app.goodbuy.core.storage.ProductImageStoragePort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -25,15 +32,20 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductRepository productRepo;
     private final ProductIngredientRepository productIngredientRepo;
     private final IngredientRepository ingredientRepo;
+    private final ProductImageStoragePort imageStorage;   // S3-backed storage
+
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public DbProductSnapshotAdapter(
             ProductRepository productRepo,
             ProductIngredientRepository productIngredientRepo,
-            IngredientRepository ingredientRepo
+            IngredientRepository ingredientRepo,
+            ProductImageStoragePort imageStorage
     ) {
         this.productRepo = productRepo;
         this.productIngredientRepo = productIngredientRepo;
         this.ingredientRepo = ingredientRepo;
+        this.imageStorage = imageStorage;
     }
 
     @Override
@@ -43,22 +55,25 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             log.debug("DbProductSnapshotAdapter.saveSnapshot called with null dto — ignoring");
             return;
         }
-        if (dto.gtin() == null || dto.gtin().isBlank()) {
-            log.debug("DbProductSnapshotAdapter.saveSnapshot called with missing gtin — ignoring");
+
+        // 🔹 Normalize GTIN to 14 digits so it matches controller / lookup.
+        String rawGtin = dto.gtin();
+        String ean14 = normalizeToGtin14(rawGtin);
+        if (ean14 == null) {
+            log.debug("DbProductSnapshotAdapter.saveSnapshot: invalid/missing gtin='{}' — ignoring", rawGtin);
             return;
         }
 
-        final String ean = dto.gtin().trim();
-        log.info("DbProductSnapshotAdapter.saveSnapshot: gtin/ean={} name={} brand={}",
-                ean, safe(dto.name()), safe(dto.brand()));
+        log.info("DbProductSnapshotAdapter.saveSnapshot: gtin={} name={} brand={}",
+                ean14, safe(dto.name()), safe(dto.brand()));
 
         // 1) Upsert product row in `products`
-        ProductEntity product = productRepo.findByEan(ean)
+        ProductEntity product = productRepo.findByEan(ean14)
                 .orElseGet(ProductEntity::new);
 
         boolean isNew = (product.getId() == null);
         if (isNew) {
-            product.setEan(ean);
+            product.setEan(ean14);
         }
 
         product.setName(dto.name());
@@ -66,17 +81,31 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         product.setCategory(dto.category());
         product.setDescription(dto.description());
 
-        // Pick a primary image URL if present
-        String primaryImageUrl = null;
+        // Pick a primary image URL from the DTO (external URL)
+        String primaryExternalUrl = null;
         List<ProductDetailDto.ImageDto> images = dto.images();
         if (images != null) {
-            primaryImageUrl = images.stream()
+            primaryExternalUrl = images.stream()
                     .filter(i -> i != null && i.url() != null && !i.url().isBlank())
                     .map(ProductDetailDto.ImageDto::url)
                     .findFirst()
                     .orElse(null);
         }
-        product.setPrimaryImageUrl(primaryImageUrl);
+
+        product.setPrimaryImageUrl(primaryExternalUrl);
+
+        // 🔹 Mirror primary image to S3 if present
+        if (primaryExternalUrl != null && !primaryExternalUrl.isBlank()) {
+            try {
+                String s3Url = mirrorExternalImageToS3(ean14, primaryExternalUrl.trim());
+                product.setPrimaryImageS3Url(s3Url);
+                log.info("DbProductSnapshotAdapter: set primary_image_s3_url for {} → {}", ean14, s3Url);
+            } catch (Exception ex) {
+                // Non-fatal: we still persist product + primary_image_url
+                log.warn("DbProductSnapshotAdapter: failed to mirror external image for ean={} url={} err={}",
+                        ean14, primaryExternalUrl, ex.toString());
+            }
+        }
 
         product = productRepo.save(product);
         log.info("DbProductSnapshotAdapter.saveSnapshot: product persisted id={} ean={} (isNew={})",
@@ -87,7 +116,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         List<ProductDetailDto.IngredientDto> dtoIngredients = dto.ingredients();
         if (dtoIngredients == null || dtoIngredients.isEmpty()) {
-            log.info("DbProductSnapshotAdapter.saveSnapshot: no ingredients in DTO for ean={}, done", ean);
+            log.info("DbProductSnapshotAdapter.saveSnapshot: no ingredients in DTO for ean={}, done", ean14);
             return;
         }
 
@@ -115,8 +144,8 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                     ingredientRepo.findByCanonicalKeyIgnoreCase(canonicalKey);
 
             if (optIngredient.isEmpty()) {
-                log.debug("DbProductSnapshotAdapter.saveSnapshot: no Ingredient for canonicalKey='{}' (displayName='{}'), skipping link",
-                        canonicalKey, displayName);
+                log.debug("DbProductSnapshotAdapter.saveSnapshot: no Ingredient for canonicalKey='{}', skipping",
+                        canonicalKey);
                 continue;
             }
 
@@ -131,11 +160,61 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             linkedCount++;
         }
 
-        log.info("DbProductSnapshotAdapter.saveSnapshot: linked {} ingredient(s) to product id={} ean={}",
-                linkedCount, product.getId(), product.getEan());
+        log.info("DbProductSnapshotAdapter.saveSnapshot: linked {} ingredient(s) to product {}",
+                linkedCount, ean14);
     }
 
-    // helpers
+    // ───────────────────────────────────────────────────────────────────────────
+    // External image → S3 mirror
+    // ───────────────────────────────────────────────────────────────────────────
+
+    private String mirrorExternalImageToS3(String ean14, String externalUrl) throws Exception {
+        log.info("DbProductSnapshotAdapter: downloading external image ean={} url={}", ean14, externalUrl);
+
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(externalUrl))
+                .GET()
+                .build();
+
+        HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new IllegalStateException("HTTP " + resp.statusCode() + " when fetching image");
+        }
+
+        byte[] bytes = resp.body();
+        String contentType = resp.headers()
+                .firstValue("Content-Type")
+                .orElse("image/jpeg");
+
+        String timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
+        String key = "catalog/"
+                + ean14 + "/primary/"
+                + timestamp + "_"
+                + java.util.UUID.randomUUID().toString().replace("-", "")
+                + ".jpg";
+
+        // ProductImageStoragePort is S3-backed (S3StorageService)
+        String s3Url = imageStorage.uploadImage(key, bytes, contentType);
+        return s3Url;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ───────────────────────────────────────────────────────────────────────────
+
+    private static String normalizeToGtin14(String raw) {
+        if (raw == null) return null;
+        String digits = raw.trim();
+        if (!digits.matches("\\d+")) {
+            return null;
+        }
+        return switch (digits.length()) {
+            case 14 -> digits;
+            case 13 -> "0" + digits;
+            case 12 -> "00" + digits;
+            default -> null;
+        };
+    }
 
     private static String firstNonBlank(String... values) {
         if (values == null) return null;

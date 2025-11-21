@@ -29,12 +29,13 @@ import java.util.Objects;
 public class ProductController {
 
     private static final Logger log = LoggerFactory.getLogger(ProductController.class);
+
     private final ProductService service;
-    private final ObjectMapper objectMapper;                        // ⬅ add
+    private final ObjectMapper objectMapper;
 
     public ProductController(ProductService service, ObjectMapper objectMapper) {
         this.service = service;
-        this.objectMapper = objectMapper;                           // ⬅ add
+        this.objectMapper = objectMapper;
     }
 
     public record ProductView(
@@ -42,6 +43,7 @@ public class ProductController {
             String name,
             String brand,
             String category,
+            String primaryImageUrl,     // 👈 NEW: single best image (S3 if available)
             List<String> images,
             List<String> ingredients,
             List<String> claims,
@@ -49,14 +51,20 @@ public class ProductController {
             String source
     ) {
         static ProductView of(ProductDetailDto dto, String source) {
+            // Flatten DTO images → list of URLs
             List<String> imageUrls = (dto.images() == null) ? List.of() :
                     dto.images().stream()
                             .map(ProductDetailDto.ImageDto::url)
                             .filter(Objects::nonNull)
                             .map(String::trim)
                             .filter(s -> !s.isEmpty())
+                            .distinct()
                             .toList();
 
+            // Best single image – front-end can just bind to this
+            String primaryImageUrl = imageUrls.isEmpty() ? null : imageUrls.get(0);
+
+            // Ingredients → display names
             List<String> ingredientNames = (dto.ingredients() == null) ? List.of() :
                     dto.ingredients().stream()
                             .filter(Objects::nonNull)
@@ -75,6 +83,7 @@ public class ProductController {
                     dto.name(),
                     dto.brand(),
                     dto.category(),
+                    primaryImageUrl,   // 👈 new field
                     imageUrls,
                     ingredientNames,
                     List.of(),
@@ -87,7 +96,7 @@ public class ProductController {
     // ── ETag-enabled simple endpoint ───────────────────────────────────────────
     @GetMapping("/{code}")
     public ResponseEntity<?> getProduct(@PathVariable("code") String rawCode,
-                                        WebRequest request) {                     // ⬅ add WebRequest
+                                        WebRequest request) {
         final String source = service.activeSourceName();
         log.info("ProductController.getProduct: activeSource={}", source);
 
@@ -111,16 +120,14 @@ public class ProductController {
         try {
             bodyJson = objectMapper.writeValueAsString(view);
         } catch (Exception ex) {
-            // Fallback: still serve without ETag if serialization failed here (shouldn’t happen)
             log.warn("ETag serialization failed, serving without ETag. gtin14={}", gtin14, ex);
             return ResponseEntity.ok()
-                    .cacheControl(CacheControl.noCache().mustRevalidate())         // ⬅ force revalidation
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
                     .header("X-Product-Source", source)
                     .body(view);
         }
         String etag = "W/\"" + DigestUtils.sha256Hex(bodyJson.getBytes(StandardCharsets.UTF_8)).substring(0, 16) + "\"";
 
-        // If-None-Match handling → 304
         if (request.checkNotModified(etag)) {
             return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
                     .cacheControl(CacheControl.noCache().mustRevalidate())
@@ -133,7 +140,7 @@ public class ProductController {
                 gtin14, safe(dto.name()), safe(dto.brand()), source);
 
         return ResponseEntity.ok()
-                .cacheControl(CacheControl.noCache().mustRevalidate())             // ⬅ store-allowed, must revalidate
+                .cacheControl(CacheControl.noCache().mustRevalidate())
                 .eTag(etag)
                 .header("X-Product-Source", source)
                 .body(view);
@@ -142,7 +149,7 @@ public class ProductController {
     // ── ETag-enabled detail endpoint ───────────────────────────────────────────
     @GetMapping("/{code}/detail")
     public ResponseEntity<?> getProductDetail(@PathVariable("code") String rawCode,
-                                              WebRequest request) {               // ⬅ add WebRequest
+                                              WebRequest request) {
         final String source = service.activeSourceName();
         log.info("ProductController.getProductDetail: activeSource={}", source);
 
@@ -159,7 +166,6 @@ public class ProductController {
             return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
         }
 
-        // Build ETag from the raw DTO (detail payload)
         String bodyJson;
         try {
             bodyJson = objectMapper.writeValueAsString(dto);
@@ -190,8 +196,11 @@ public class ProductController {
                 .body(dto);
     }
 
-    // ── Helpers (unchanged) ────────────────────────────────────────────────────
-    private static ResponseEntity<Map<String, Object>> buildError(HttpStatus status, String code, String message, String source) {
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private static ResponseEntity<Map<String, Object>> buildError(
+            HttpStatus status, String code, String message, String source
+    ) {
         Map<String, Object> body = new HashMap<>();
         body.put("status", status.value());
         body.put("error", code);
@@ -200,7 +209,9 @@ public class ProductController {
         return ResponseEntity.status(status).body(body);
     }
 
-    private static String safe(String s) { return (s == null || s.isBlank()) ? "—" : s; }
+    private static String safe(String s) {
+        return (s == null || s.isBlank()) ? "—" : s;
+    }
 
     private static String coerceToGtin14Or422(String raw) {
         if (raw == null) {
