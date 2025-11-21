@@ -10,6 +10,7 @@ import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Component
 public class IngredientMapper {
@@ -19,27 +20,38 @@ public class IngredientMapper {
             return null;
         }
 
-        // Aliases -> List<String>, very defensive so it always compiles.
+        // Aliases -> List<String>
         List<String> aliases = (entity.getAliases() == null)
                 ? List.of()
                 : entity.getAliases().stream()
-                .map(this::aliasToString)
+                .map(this::aliasToString)          // use actual alias string
                 .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .toList();
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
 
-        // Tags (if your entity has getTags(); otherwise this will be an empty list)
-        List<String> tags = (hasTags(entity))
-                ? entity.getTags()
-                : List.of();
+        // Tags (already wired in your entity)
+        List<String> tags = (entity.getTags() == null)
+                ? List.of()
+                : entity.getTags().stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
 
         Long id = entity.getId();
         String canonicalKey = entity.getCanonicalKey();
         String displayName = entity.getDisplayName();
         String summary = entity.getSummary();
         String description = entity.getDescription();
-        String func = null; // set if you have a func field
+
+        // Keeping func null for now so we don't guess your field names.
+        String func = null;
+
         String concerns = entity.getConcerns();
         BigDecimal safetyScore = entity.getSafetyScore();
         String ratingLetter = entity.getRatingLetter();
@@ -80,18 +92,7 @@ public class IngredientMapper {
 
     private String aliasToString(IngredientAlias alias) {
         if (alias == null) return null;
-
-        // Minimal, always-safe version: rely on toString()
-        // If your entity has getName() or getAlias(), you can swap this later.
-        return alias.toString();
-    }
-
-    // Helper to avoid compile errors if getTags() doesn't exist.
-    private boolean hasTags(Ingredient entity) {
-        try {
-            return entity.getTags() != null;
-        } catch (NoSuchMethodError e) {
-            return false;
-        }
+        // Use the actual alias field from your JPA entity
+        return alias.getAlias();
     }
 }

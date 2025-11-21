@@ -90,6 +90,11 @@ public class MissingProductReportService {
         e.setAppVersion(appVersion);
         e.setPlatform(platform);
         e.setNotes(notes);
+
+        // 🔥 NEW: persist image URLs into the entity (they should map to front_image_url / back_image_url columns)
+        e.setFrontImageS3Url(frontImageUrl);
+        e.setBackImageS3Url(backImageUrl);
+
         // "occurredAt" = last time we saw this product missing
         e.setOccurredAt(now);
 
