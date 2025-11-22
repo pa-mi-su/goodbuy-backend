@@ -69,7 +69,12 @@ public class MissingIngredientReportService {
             throw new IllegalArgumentException("productEan must not be null or blank");
         }
 
-        // 1) Insert-or-update by (ingredientName, productEan)
+        // Compute normalized GTIN-14 form for logging / Slack
+        String productGtin14 = normalizeToGtin14(productEan);
+        log.debug("MissingIngredientReportService.report: productEan(raw)={} normalized(gtin14)={}",
+                productEan, productGtin14);
+
+        // 1) Insert-or-update by (ingredientName, productEan) – we keep using the raw EAN
         MissingIngredientReportEntity e = repo
                 .findByIngredientNameAndProductEan(ingredientName, productEan)
                 .orElseGet(MissingIngredientReportEntity::new);
@@ -103,6 +108,7 @@ public class MissingIngredientReportService {
                 String text = buildSlackText(
                         ingredientName,
                         productEan,
+                        productGtin14,
                         appVersion,
                         platform,
                         notes
@@ -139,9 +145,35 @@ public class MissingIngredientReportService {
         return now.isAfter(nextAllowed);
     }
 
+    /**
+     * Normalize a raw EAN/UPC to a 14-digit GTIN where possible.
+     *  - Strips non-digits
+     *  - If >= 14 digits, uses the last 14
+     *  - If 13 digits, pads with one leading '0'
+     *  - If 12 digits, pads with two leading '0'
+     *  - Otherwise, returns whatever digits we have (best effort)
+     */
+    private String normalizeToGtin14(String rawEan) {
+        if (rawEan == null) {
+            return null;
+        }
+        String digits = rawEan.replaceAll("\\D", "");
+        if (digits.length() >= 14) {
+            // take the right-most 14 digits
+            return digits.substring(digits.length() - 14);
+        } else if (digits.length() == 13) {
+            return "0" + digits;
+        } else if (digits.length() == 12) {
+            return "00" + digits;
+        }
+        // best effort fallback
+        return digits;
+    }
+
     private String buildSlackText(
             String ingredientName,
-            String productEan,
+            String productEanRaw,
+            String productGtin14,
             String appVersion,
             String platform,
             String notes
@@ -149,7 +181,8 @@ public class MissingIngredientReportService {
         StringBuilder sb = new StringBuilder();
         sb.append("*Missing Ingredient Reported*").append("\n");
         sb.append("• *Name*: `").append(orDash(ingredientName)).append("`\n");
-        sb.append("• *EAN*: `").append(orDash(productEan)).append("`\n");
+        sb.append("• *EAN (raw)*: `").append(orDash(productEanRaw)).append("`\n");
+        sb.append("• *EAN (GTIN-14)*: `").append(orDash(productGtin14)).append("`\n");
         sb.append("• *Platform*: ").append(orDash(platform)).append("\n");
         sb.append("• *App Version*: ").append(orDash(appVersion)).append("\n");
         if (notes != null && !notes.isBlank()) {

@@ -16,15 +16,13 @@ import java.util.stream.Collectors;
 public class IngredientMapper {
 
     public IngredientDTO toDto(Ingredient entity) {
-        if (entity == null) {
-            return null;
-        }
+        if (entity == null) return null;
 
-        // Aliases -> List<String>
+        // --- ALIASES ---------------------------------------------------------
         List<String> aliases = (entity.getAliases() == null)
                 ? List.of()
                 : entity.getAliases().stream()
-                .map(this::aliasToString)          // use actual alias string
+                .map(this::aliasToString)      // <— correct: use alias.getAlias()
                 .filter(Objects::nonNull)
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
@@ -32,7 +30,7 @@ public class IngredientMapper {
                 .sorted()
                 .collect(Collectors.toList());
 
-        // Tags (already wired in your entity)
+        // --- TAGS ------------------------------------------------------------
         List<String> tags = (entity.getTags() == null)
                 ? List.of()
                 : entity.getTags().stream()
@@ -43,14 +41,15 @@ public class IngredientMapper {
                 .sorted()
                 .collect(Collectors.toList());
 
+        // --- FIELDS ----------------------------------------------------------
         Long id = entity.getId();
         String canonicalKey = entity.getCanonicalKey();
         String displayName = entity.getDisplayName();
         String summary = entity.getSummary();
         String description = entity.getDescription();
 
-        // Keeping func null for now so we don't guess your field names.
-        String func = null;
+        // 👇 Mapped properly to your IngredientDTO.func
+        String func = entity.getFuncUse();   // IMPORTANT: you DO have func_use in DB + entity
 
         String concerns = entity.getConcerns();
         BigDecimal safetyScore = entity.getSafetyScore();
@@ -67,7 +66,7 @@ public class IngredientMapper {
                 displayName,
                 summary,
                 description,
-                func,
+                func,               // <— now correctly included
                 concerns,
                 safetyScore,
                 ratingLetter,
@@ -92,7 +91,6 @@ public class IngredientMapper {
 
     private String aliasToString(IngredientAlias alias) {
         if (alias == null) return null;
-        // Use the actual alias field from your JPA entity
-        return alias.getAlias();
+        return alias.getAlias();        // <-- FIXED: use alias field, not toString()
     }
 }

@@ -1,4 +1,5 @@
 package app.goodbuy.ingredients;
+
 import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
@@ -34,8 +35,14 @@ public class IngredientController {
         if (query.isEmpty()) {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
         }
-        return service.findByNameOrAlias(query)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ingredient not found: " + query));
+
+        return service.searchRanked(query)
+                .orElseThrow(() ->
+                        new ResponseStatusException(
+                                NOT_FOUND,
+                                "Ingredient not found: " + query
+                        )
+                );
     }
 
     // B) GET /api/ingredients/{nameOrKey} (path form)
@@ -45,8 +52,14 @@ public class IngredientController {
         if (query.isEmpty()) {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
         }
-        return service.findByNameOrAlias(query)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Ingredient not found: " + query));
+
+        return service.searchRanked(query)
+                .orElseThrow(() ->
+                        new ResponseStatusException(
+                                NOT_FOUND,
+                                "Ingredient not found: " + query
+                        )
+                );
     }
 
     // POST /api/ingredients/_batch
@@ -59,7 +72,7 @@ public class IngredientController {
         var cleaned = names.stream()
                 .map(this::normalize)
                 .filter(s -> !s.isEmpty())
-                .collect(Collectors.toCollection(LinkedHashSet::new))
+                .collect(Collectors.toCollection(LinkedHashSet::new)) // dedupe, preserve order
                 .stream()
                 .limit(BATCH_LIMIT)
                 .toList();
@@ -68,7 +81,8 @@ public class IngredientController {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_request");
         }
 
-        return service.findManyByNamesOrAliases(cleaned);
+        // Each name gets its best-ranked ingredient (canonical > alias > loose)
+        return service.searchManyRanked(cleaned);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 package app.goodbuy.products;
 
+import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.ingredients.IngredientReadService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.slf4j.Logger;
@@ -17,11 +19,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 
 @Validated
 @RestController
@@ -32,25 +32,53 @@ public class ProductController {
 
     private final ProductService service;
     private final ObjectMapper objectMapper;
+    private final IngredientReadService ingredientReadService;
 
-    public ProductController(ProductService service, ObjectMapper objectMapper) {
+    public ProductController(ProductService service,
+                             ObjectMapper objectMapper,
+                             IngredientReadService ingredientReadService) {
         this.service = service;
         this.objectMapper = objectMapper;
+        this.ingredientReadService = ingredientReadService;
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // View models
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Per-ingredient view for the product endpoint.
+     * This is what iOS will use to color the leaf:
+     *
+     *  - name: display label used on the list
+     *  - canonicalKey: our internal canonical key (if present)
+     *  - inCatalog: true if we found it in GoodBuy DB
+     *  - ratingLetter / safetyScore: used for coloring
+     */
+    public record IngredientView(
+            String name,
+            String canonicalKey,
+            boolean inCatalog,
+            String ratingLetter,
+            BigDecimal safetyScore
+    ) {}
 
     public record ProductView(
             String gtin,
             String name,
             String brand,
             String category,
-            String primaryImageUrl,     // 👈 NEW: single best image (S3 if available)
+            String primaryImageUrl,
             List<String> images,
-            List<String> ingredients,
+            List<IngredientView> ingredients,
             List<String> claims,
             List<String> hazards,
             String source
     ) {
-        static ProductView of(ProductDetailDto dto, String source) {
+        static ProductView of(ProductDetailDto dto,
+                              String source,
+                              IngredientReadService ingredientReadService) {
+
             // Flatten DTO images → list of URLs
             List<String> imageUrls = (dto.images() == null) ? List.of() :
                     dto.images().stream()
@@ -64,15 +92,45 @@ public class ProductController {
             // Best single image – front-end can just bind to this
             String primaryImageUrl = imageUrls.isEmpty() ? null : imageUrls.get(0);
 
-            // Ingredients → display names
-            List<String> ingredientNames = (dto.ingredients() == null) ? List.of() :
+            // Ingredients: resolve each label against GoodBuy ingredient catalog
+            List<IngredientView> ingredientViews = (dto.ingredients() == null) ? List.of() :
                     dto.ingredients().stream()
                             .filter(Objects::nonNull)
                             .map(i -> {
-                                if (i.original() != null && !i.original().isBlank()) return i.original().trim();
-                                if (i.canonical() != null && !i.canonical().isBlank()) return i.canonical().trim();
-                                if (i.id() != null && !i.id().isBlank()) return i.id().trim();
-                                return null;
+                                // Keep exactly the label iOS shows
+                                String label = null;
+                                if (i.original() != null && !i.original().isBlank()) {
+                                    label = i.original().trim();
+                                } else if (i.canonical() != null && !i.canonical().isBlank()) {
+                                    label = i.canonical().trim();
+                                } else if (i.id() != null && !i.id().isBlank()) {
+                                    label = i.id().trim();
+                                }
+
+                                if (label == null || label.isBlank()) {
+                                    return null;
+                                }
+
+                                Optional<IngredientDTO> opt = ingredientReadService.searchRanked(label);
+                                if (opt.isPresent()) {
+                                    IngredientDTO ing = opt.get();
+                                    return new IngredientView(
+                                            label,
+                                            ing.canonicalKey(),
+                                            true,
+                                            ing.ratingLetter(),
+                                            ing.safetyScore()
+                                    );
+                                } else {
+                                    // Not in DB yet → white leaf on the client
+                                    return new IngredientView(
+                                            label,
+                                            null,
+                                            false,
+                                            null,
+                                            null
+                                    );
+                                }
                             })
                             .filter(Objects::nonNull)
                             .distinct()
@@ -83,9 +141,9 @@ public class ProductController {
                     dto.name(),
                     dto.brand(),
                     dto.category(),
-                    primaryImageUrl,   // 👈 new field
+                    primaryImageUrl,
                     imageUrls,
-                    ingredientNames,
+                    ingredientViews,
                     List.of(),
                     List.of(),
                     source
@@ -93,7 +151,8 @@ public class ProductController {
         }
     }
 
-    // ── ETag-enabled simple endpoint ───────────────────────────────────────────
+    // ── Simple endpoint with ETag (used by iOS ResultView) ────────────────────
+
     @GetMapping("/{code}")
     public ResponseEntity<?> getProduct(@PathVariable("code") String rawCode,
                                         WebRequest request) {
@@ -113,7 +172,7 @@ public class ProductController {
             return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
         }
 
-        ProductView view = ProductView.of(dto, source);
+        ProductView view = ProductView.of(dto, source, ingredientReadService);
 
         // Compute a stable weak ETag from the response body
         String bodyJson;
@@ -126,6 +185,7 @@ public class ProductController {
                     .header("X-Product-Source", source)
                     .body(view);
         }
+
         String etag = "W/\"" + DigestUtils.sha256Hex(bodyJson.getBytes(StandardCharsets.UTF_8)).substring(0, 16) + "\"";
 
         if (request.checkNotModified(etag)) {
@@ -146,7 +206,8 @@ public class ProductController {
                 .body(view);
     }
 
-    // ── ETag-enabled detail endpoint ───────────────────────────────────────────
+    // ── Detail endpoint (unchanged – still returns full DTO) ──────────────────
+
     @GetMapping("/{code}/detail")
     public ResponseEntity<?> getProductDetail(@PathVariable("code") String rawCode,
                                               WebRequest request) {
@@ -176,6 +237,7 @@ public class ProductController {
                     .header("X-Product-Source", dto.source() == null ? source : dto.source())
                     .body(dto);
         }
+
         String etag = "W/\"" + DigestUtils.sha256Hex(bodyJson.getBytes(StandardCharsets.UTF_8)).substring(0, 16) + "\"";
 
         if (request.checkNotModified(etag)) {
