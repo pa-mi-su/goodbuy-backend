@@ -1,4 +1,5 @@
 package app.goodbuy.adapters.core.ingredients.model;
+
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -9,7 +10,8 @@ import java.util.List;
 @Table(name = "ingredients")
 public class Ingredient {
 
-    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(name = "canonical_key", nullable = false, unique = true)
@@ -18,39 +20,36 @@ public class Ingredient {
     @Column(name = "display_name", nullable = false)
     private String displayName;
 
-    // ── Fields from your list ─────────────────────────────────────────────────
     @Column(name = "summary", columnDefinition = "TEXT")
-    private String summary;                     // TEXT
+    private String summary;
 
-    @Column(name = "safety_score", precision = 5, scale = 2)
-    private BigDecimal safetyScore;            // NUMERIC(5,2)
+    // ❗️ FIXED: removed precision/scale to avoid Hibernate crash
+    @Column(name = "safety_score")
+    private BigDecimal safetyScore;
 
-    // Postgres doesn't enforce length on TEXT; use CHAR(1) to truly constrain to 1.
-    @Column(name = "rating_letter", columnDefinition = "CHAR(1)")
-    private String ratingLetter;               // TEXT(1) → CHAR(1) in Postgres
+    @Column(name = "rating_letter")
+    private String ratingLetter;
 
-    // JPA-friendly join table for sources (instead of TEXT[])
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "ingredient_sources", joinColumns = @JoinColumn(name = "ingredient_id"))
     @Column(name = "url", nullable = false)
-    private List<String> sourceUrls = new ArrayList<>();   // TEXT[] or join table → using join table
+    private List<String> sourceUrls = new ArrayList<>();
 
     @Column(name = "category")
-    private String category;                   // TEXT
+    private String category;
 
     @Column(name = "regulation_notes", columnDefinition = "TEXT")
-    private String regulationNotes;            // TEXT
+    private String regulationNotes;
 
     @Column(name = "is_active", nullable = false)
-    private boolean isActive = true;           // BOOLEAN DEFAULT TRUE
+    private boolean isActive = true;
 
     @Column(name = "created_at")
-    private OffsetDateTime createdAt;          // TIMESTAMPTZ
+    private OffsetDateTime createdAt;
 
     @Column(name = "updated_at")
-    private OffsetDateTime updatedAt;          // TIMESTAMPTZ
+    private OffsetDateTime updatedAt;
 
-    // ── Existing fields you already had (kept) ────────────────────────────────
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
@@ -71,7 +70,9 @@ public class Ingredient {
     @OneToMany(mappedBy = "ingredient", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<IngredientAlias> aliases = new ArrayList<>();
 
-    // ── Timestamps ────────────────────────────────────────────────────────────
+    // ───────────────────────────────
+    // Timestamps
+    // ───────────────────────────────
     @PrePersist
     void onCreate() {
         var now = OffsetDateTime.now();
@@ -80,12 +81,18 @@ public class Ingredient {
     }
 
     @PreUpdate
-    void onUpdate() { updatedAt = OffsetDateTime.now(); }
+    void onUpdate() {
+        updatedAt = OffsetDateTime.now();
+    }
 
-    // ── Getters/Setters (only essentials shown; add others as needed) ─────────
+    // ───────────────────────────────
+    // Getters / Setters
+    // ───────────────────────────────
     public Long getId() { return id; }
+
     public String getCanonicalKey() { return canonicalKey; }
     public void setCanonicalKey(String canonicalKey) { this.canonicalKey = canonicalKey; }
+
     public String getDisplayName() { return displayName; }
     public void setDisplayName(String displayName) { this.displayName = displayName; }
 

@@ -30,19 +30,19 @@ public class DbProductLookupAdapter implements ProductLookupPort {
 
     @Override
     @Transactional(readOnly = true)
-    public Optional<ProductDetailDto> findByGtin(String gtin14) {
-        if (gtin14 == null || gtin14.isBlank()) {
-            log.debug("DbProductLookupAdapter.findByGtin called with null/blank gtin — returning empty");
+    public Optional<ProductDetailDto> findByGtin(String gtinOrEan) {
+        String ean14 = normalizeToGtin14(gtinOrEan);
+        if (ean14 == null) {
+            log.debug("DbProductLookupAdapter.findByGtin called with invalid gtin='{}' — returning empty", gtinOrEan);
             return Optional.empty();
         }
 
-        final String ean = gtin14.trim();
-        log.debug("DbProductLookupAdapter.findByGtin: gtin/ean={}", ean);
+        log.debug("DbProductLookupAdapter.findByGtin: gtin/ean14={}", ean14);
 
         // 1) Look up product in GoodBuy products table
-        Optional<ProductEntity> optProduct = productRepo.findByEan(ean);
+        Optional<ProductEntity> optProduct = productRepo.findByEan(ean14);
         if (optProduct.isEmpty()) {
-            log.debug("DbProductLookupAdapter.findByGtin: no product row for ean={}", ean);
+            log.debug("DbProductLookupAdapter.findByGtin: no product row for ean={}", ean14);
             return Optional.empty();
         }
 
@@ -151,6 +151,20 @@ public class DbProductLookupAdapter implements ProductLookupPort {
     // ───────────────────────────────────────────────────────────────────────────
     // HELPERS
     // ───────────────────────────────────────────────────────────────────────────
+
+    private static String normalizeToGtin14(String raw) {
+        if (raw == null) return null;
+        String digits = raw.trim();
+        if (!digits.matches("\\d+")) {
+            return null;
+        }
+        return switch (digits.length()) {
+            case 14 -> digits;
+            case 13 -> "0" + digits;
+            case 12 -> "00" + digits;
+            default -> null;
+        };
+    }
 
     private static String firstNonBlank(String... values) {
         if (values == null) return null;
