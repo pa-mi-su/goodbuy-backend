@@ -20,9 +20,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 @Component
 public class DbProductSnapshotAdapter implements ProductSnapshotPort {
@@ -121,6 +123,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
 
         int linkedCount = 0;
+        // 🔹 Deduplicate by ingredient.id within this snapshot
+        Set<Long> linkedIngredientIds = new HashSet<>();
+
         for (ProductDetailDto.IngredientDto ingDto : dtoIngredients) {
             if (ingDto == null) continue;
 
@@ -150,6 +155,24 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             }
 
             Ingredient ingredient = optIngredient.get();
+            Long ingredientId = ingredient.getId();
+            if (ingredientId == null) {
+                continue;
+            }
+
+            // In-snapshot dedupe
+            if (!linkedIngredientIds.add(ingredientId)) {
+                log.debug("DbProductSnapshotAdapter.saveSnapshot: ingredient_id={} already linked in this snapshot for product_id={}, skipping dup",
+                        ingredientId, product.getId());
+                continue;
+            }
+
+            // 🔒 Hard guard against uq_prod_ing_pair — if row already exists in DB, skip insert.
+            if (productIngredientRepo.existsByProductAndIngredient(product, ingredient)) {
+                log.debug("DbProductSnapshotAdapter.saveSnapshot: link already exists product_id={} ingredient_id={}, skipping DB dup",
+                        product.getId(), ingredientId);
+                continue;
+            }
 
             ProductIngredientEntity link = new ProductIngredientEntity();
             link.setProduct(product);
@@ -194,8 +217,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 + ".jpg";
 
         // ProductImageStoragePort is S3-backed (S3StorageService)
-        String s3Url = imageStorage.uploadImage(key, bytes, contentType);
-        return s3Url;
+        return imageStorage.uploadImage(key, bytes, contentType);
     }
 
     // ───────────────────────────────────────────────────────────────────────────
