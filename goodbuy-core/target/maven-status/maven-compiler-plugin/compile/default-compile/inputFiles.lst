@@ -1,0 +1,15 @@
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/port/ProductSnapshotPort.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/history/dto/ScanHistoryDTO.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/notifications/LoggingSlackMissingIngredientNotifier.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/ingredients/dto/IngredientDTO.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/util/IngredientMerger.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/notifications/NotificationPort.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/dto/ProductDetailDto.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/util/BarcodeNormalizer.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/port/ExternalCatalogClient.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/ingredients/port/IngredientReadPort.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/ingredients/dto/MissingIngredientReportRequest.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/storage/ProductImageStoragePort.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/notifications/SlackMissingIngredientNotifier.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/products/port/ProductLookupPort.java
+/Users/pms/Documents/Projects/Java/goodbuy-backend/goodbuy-core/src/main/java/app/goodbuy/core/favorites/dto/FavoriteDTO.java
