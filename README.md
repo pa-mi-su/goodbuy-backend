@@ -6,7 +6,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-lightblue)](https://www.postgresql.org/)
 [![Flyway](https://img.shields.io/badge/Flyway-Migrations-orange)](https://flywaydb.org/)
 
-**GoodBuy Backend** is a Spring Boot service that powers the GoodBuy iOS app with REST APIs for barcode-based product lookups and ingredient metadata.
+**GoodBuy Backend** is a Spring Boot application that powers the GoodBuy iOS app with REST APIs for barcode-based product lookups and ingredient metadata.
 
 ---
 
