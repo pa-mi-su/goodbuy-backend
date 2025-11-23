@@ -23,9 +23,8 @@ services:
     environment:
       SPRING_APPLICATION_NAME: goodbuy-api
       SERVER_PORT: "8080"
+      # default to dev when not explicitly set
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
-      SPRING_CONFIG_IMPORT: |
-        optional:file:/run/secrets/app-secrets.properties, optional:file:/run/secrets/db-secrets.properties
     depends_on:
       postgres:
         condition: service_healthy
