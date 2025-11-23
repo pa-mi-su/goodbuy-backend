@@ -39,6 +39,6 @@ EXPOSE 8080
 
 # Container-aware JVM settings; profile overridable at runtime
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+UseContainerSupport"
-ENV SPRING_PROFILES_ACTIVE=default
+ENV SPRING_PROFILES_ACTIVE=dev
 
 ENTRYPOINT ["java","-jar","/app/app.jar"]
