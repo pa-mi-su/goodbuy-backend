@@ -11,20 +11,14 @@
 ---
 
 ## Table of Contents
+
 - [Overview](#overview)
-- [Architecture](#architecture)
+- [System Architecture Diagram](#system-architecture-diagram)
 - [Project Structure](#project-structure)
-- [Getting Started (Local, Docker)](#getting-started-local-docker)
-  - [1) Create private configuration](#1-create-private-configuration)
-  - [2) Build & run with Docker Compose](#2-build--run-with-docker-compose)
-  - [3) Verify health & docs](#3-verify-health--docs)
-  - [4) Connect with a SQL client (optional)](#4-connect-with-a-sql-client-optional)
-- [Spring Profiles](#spring-profiles)
-- [Environment & Secrets](#environment--secrets)
-- [API Usage](#api-usage)
-- [Logging](#logging)
-- [Troubleshooting](#troubleshooting)
-- [For Recruiters](#for-recruiters)
+- [Logging and Running](#logging-and-running)
+- [Product API Endpoints Overview](#product-api-endpoints-overview)
+- [Product Lookup Caching and ETag Revalidation](#product-lookup-caching-and-etag-revalidation)
+- [Tech Stack](#tech-stack)
 - [License](#license)
 
 ---
@@ -42,143 +36,211 @@
 
 ---
 
-## Architecture
+## System Architecture Diagram
 
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│                             iOS / Frontend                         │
+│─────────────────────────────────────────────────────────────────────│
+│ - Scans barcode (e.g. 0033200011408)                               │
+│ - Calls backend: GET /v1/products/{code}                           │
+└─────────────────────────────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          goodbuy-api (Spring Boot)                 │
+│─────────────────────────────────────────────────────────────────────│
+│ REST Controllers                                                   │
+│   • ProductController (/v1/products)                               │
+│   • IngredientController (/api/ingredients)                        │
+│                                                                     │
+│ Services                                                           │
+│   • ProductService → orchestrates catalog lookup                   │
+│   • IngredientReadService → orchestrates ingredient DB reads       │
+│                                                                     │
+│ Shared Infrastructure                                              │
+│   • RequestLoggingFilter, GlobalExceptionHandler                   │
+│   • CORS & Swagger config                                          │
+└─────────────────────────────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        goodbuy-core (Domain Layer)                 │
+│─────────────────────────────────────────────────────────────────────│
+│ DTOs & Ports (Pure Java)                                           │
+│   • ProductDetailDto, IngredientDto                                │
+│   • ExternalCatalogClient, IngredientReadPort                      │
+│   • BarcodeNormalizer, enums, utils                                │
+│                                                                     │
+│ No Spring, no HTTP, no DB — pure data + contracts                  │
+└─────────────────────────────────────────────────────────────────────┘
+          │                                 │
+          ▼                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│             goodbuy-adapters-catalog (External Providers)          │
+│─────────────────────────────────────────────────────────────────────│
+│ • EanDbCatalogClient                                               │
+│     - Calls https://ean-db.com/api/v2/product/{gtin}               │
+│     - Maps JSON → ProductDetailDto                                 │
+│ • EanSearchClient (optional)                                       │
+│ • CatalogConfig / CatalogProperties                                │
+│     - Chooses provider, configures timeouts & API keys             │
+└─────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    goodbuy-adapters-core + Postgres                │
+│─────────────────────────────────────────────────────────────────────│
+│ • CoreIngredientReadAdapter                                        │
+│ • IngredientRepository (JPA)                                       │
+│ • Tables: ingredients, aliases, hazards, tags, etc.                │
+└─────────────────────────────────────────────────────────────────────┘
 ```
-iOS App (SwiftUI)
-     │  GET /v1/products/{gtin}
-     ▼
-GoodBuy Backend (Spring Boot)
-     │
-     ├─ PostgreSQL 16 (Flyway migrations)
-     └─ EAN-DB (external provider via JWT)
-```
+
+**End-to-end flow (simplified)**
+
+- iOS → `ProductController` → `ProductService` → `EanDbCatalogClient` → EAN-DB API → `ProductDetailDto` → response to iOS
+- iOS → `IngredientController` → `IngredientReadService` → `CoreIngredientReadAdapter` → `IngredientRepository` (Postgres) → `IngredientDto` → response to iOS
 
 ---
 
 ## Project Structure
 
-```
+```text
 goodbuy-backend/
-├── goodbuy-api/
-│   ├── src/main/java/app/goodbuy/...
-│   ├── src/main/resources/
-│   │   ├── application.properties
-│   │   ├── application-dev.properties
-│   │   ├── application-prod.properties
-│   │   └── db/migration/
-│   ├── Dockerfile
-│   └── pom.xml
-├── docker-compose.yml
-├── .secrets/
-│   └── app-secrets.properties
-├── .env
-└── README.md
-```
-
-> **Note:** All credentials and JWTs live in `.env` and `.secrets/app-secrets.properties`. These files are private and excluded via `.gitignore`.
-
----
-
-## Getting Started (Local, Docker)
-
-### 1) Create private configuration
-
-**.env**
-
-```dotenv
-POSTGRES_DB=bpdb
-POSTGRES_USER=bpuser
-POSTGRES_PASSWORD=replace-with-strong-password
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-HOST_PORT_POSTGRES=5433
-DB_URL=jdbc:postgresql://postgres:5432/bpdb
-DB_URL_HOST=jdbc:postgresql://localhost:5433/bpdb
-```
-
-**.secrets/app-secrets.properties**
-
-```properties
-goodbuy.catalog.enabled=true
-goodbuy.catalog.eandb.jwt=REPLACE_WITH_REAL_LONG_JWT_TOKEN
-```
-
-### 2) Build & run with Docker Compose
-
-```bash
-docker compose up -d --build postgres
-docker compose up -d --build goodbuy-api
-```
-
-### 3) Verify health & docs
-
-```bash
-curl -fsS http://localhost:8080/actuator/health && echo
-curl -fsS http://localhost:8080/actuator/info && echo
-curl -fsS http://localhost:8080/v3/api-docs | head -c 400 && echo
-```
-
-### 4) Connect with SQL client (optional)
-
-**DBeaver / psql connection:**
-Host: `localhost`
-Port: `5433`
-DB: `bpdb`
-User: `bpuser`
-Pass: `replace-with-strong-password`
-
----
-
-## Spring Profiles
-
-```yaml
-environment:
-  SPRING_PROFILES_ACTIVE: dev   # or prod
-```
-
-Or via CLI:
-
-```bash
-java -jar app.jar --spring.profiles.active=prod
+├─ pom.xml
+├─ docker-compose.yml
+│
+├─ goodbuy-api/                          # REST API (Spring Boot)
+│  └─ src/main/java/app/goodbuy/
+│     ├─ GoodBuyBackendApplication.java
+│     ├─ api/
+│     │  ├─ RequestLoggingFilter.java
+│     │  └─ GlobalExceptionHandler.java
+│     ├─ config/
+│     │  ├─ WebConfig.java
+│     │  └─ AppProperties.java
+│     ├─ products/
+│     │  ├─ ProductController.java
+│     │  └─ ProductService.java
+│     └─ ingredients/
+│        ├─ IngredientController.java
+│        └─ IngredientReadService.java
+│
+├─ goodbuy-core/                         # Domain logic + DTOs + ports
+│  └─ src/main/java/app/goodbuy/core/
+│     ├─ products/
+│     │  ├─ dto/ProductDetailDto.java
+│     │  ├─ ports/ExternalCatalogClient.java
+│     │  └─ util/BarcodeNormalizer.java
+│     └─ ingredients/
+│        ├─ dto/IngredientDto.java
+│        └─ ports/IngredientReadPort.java
+│
+├─ goodbuy-adapters-catalog/             # External catalog integrations
+│  └─ src/main/java/app/goodbuy/adapters/catalog/
+│     ├─ CatalogConfig.java
+│     ├─ CatalogProperties.java
+│     ├─ eandb/EanDbCatalogClient.java
+│     └─ eansearch/EanSearchClient.java
+│
+├─ goodbuy-adapters-core/                # Postgres adapter
+│  └─ src/main/java/app/goodbuy/adapters/core/
+│     ├─ CoreIngredientReadAdapter.java
+│     ├─ repository/IngredientRepository.java
+│     └─ entities/
+│        ├─ IngredientEntity.java
+│        ├─ AliasEntity.java
+│        └─ HazardEntity.java
+│
+└─ goodbuy-migrations/                   # Flyway migrations
+   └─ src/main/resources/db/migration/
+      ├─ V1__ingredients_init.sql
+      ├─ V2__aliases_table.sql
+      └─ V3__hazards_table.sql
 ```
 
 ---
 
-## API Usage
+## Product Lookup Caching and ETag Revalidation
 
-```bash
-curl -fsS "http://localhost:8080/v1/products/0808124111042" | jq .
+The GoodBuy platform implements a multi-layer caching strategy across both the iOS client and backend API.
+This reduces redundant network calls, improves performance, and maintains synchronized product data.
+
+### High-Level Overview
+
+When a product is scanned:
+
+```
+iOS Memory Cache  →  iOS URLCache (ETag)  →  Backend ProductCache  →  External EAN-DB
+       ↓                     ↓                        ↓
+  Immediate hit         304 Not Modified        Remote fetch if cache miss
 ```
 
-**Health / Info:**
-```bash
-curl -fsS http://localhost:8080/actuator/health
-curl -fsS http://localhost:8080/actuator/info
-```
+![Caching Flow](goodbuy_caching_flow_v2.png)
 
 ---
 
-## Logging and Running
+### iOS Client Implementation
 
-•	Dev (plain logs):
-        SPRING_PROFILES_ACTIVE=dev docker compose up -d --build && docker compose logs -f goodbuy-api
+**Files:** `GoodBuyBackendProvider.swift`, `ResultViewModel.swift`
 
-•	Prod (plain logs):
-        SPRING_PROFILES_ACTIVE=prod docker compose up -d --build && docker compose logs -f goodbuy-api
+#### In-Memory TTL Cache (~15 seconds)
+- Rapid re-scans of the same product (within ~15s) are served from memory.
+- No network call is made, providing a zero-latency experience.
 
-•	Prod (JSON logs):
-        SPRING_PROFILES_ACTIVE=prod,prod-json docker compose up -d --build && docker compose logs -f goodbuy-api
+#### System URLCache with ETag Revalidation
+- Relies on backend `ETag` headers for conditional requests.
+- Uses `If-None-Match` for revalidation.
+- `304 Not Modified` → reuse cached body.
+- `200 OK` → update cache automatically.
 
 ---
 
-## Stack
+### Backend Implementation
 
-- Spring Boot 3.3, Java 17
-- Dockerized Postgres + Flyway migrations
-- Modular POM, OpenAPI docs
-- Ready for multi-service expansion
-- Clean CI/CD readiness for AWS or bare EC2
+**File:** `ProductController.java`
+
+#### ETag Support
+- Each `/v1/products/{code}` response includes a weak ETag (`W/"sha256…"`) derived from the JSON body.
+- If the client provides `If-None-Match`, a matching hash returns `304 Not Modified`.
+
+#### Cache-Control Policy
+
+```http
+Cache-Control: public, max-age=300, stale-while-revalidate=60
+```
+
+- Cached responses remain valid for 5 minutes and support background revalidation.
+- Reduces redundant API calls while maintaining up-to-date content.
+
+#### Backend Product Cache
+- The backend caches product DTOs in memory (or Redis).
+- Cache hits are served instantly; misses fetch from EAN-DB and are stored for reuse.
+
+---
+
+### Benefits
+
+- **Improved performance:** Same-product re-scans typically <50 ms
+- **Reduced load:** Requests often resolve via cache or `304`
+- **Smart freshness:** Cached data auto-refreshes via ETags
+- **Consistency:** Client and server remain synchronized efficiently
+
+---
+
+## Tech Stack
+
+| Layer            | Technology                     |
+|------------------|--------------------------------|
+| Language         | Java 17                        |
+| Framework        | Spring Boot 3.3.x              |
+| Database         | PostgreSQL 16                  |
+| Migrations       | Flyway                         |
+| Containerization | Docker / Docker Compose        |
+| API Docs         | OpenAPI / Swagger              |
+| Logging          | Structured logs + Request IDs  |
+| Architecture     | Modular Hexagonal              |
 
 ---
 
