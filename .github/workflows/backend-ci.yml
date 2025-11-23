@@ -2,12 +2,12 @@ name: Backend CI
 
 on:
   push:
-    branches: [dev, uat, prod, main]
+    branches: [ dev, uat, prod, main ]
   pull_request:
-    branches: [dev, uat, prod, main]
+    branches: [ dev, uat, prod, main ]
 
 jobs:
-  build-and-test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,7 +19,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: 'maven'
+          cache: maven
 
-      - name: Build and run tests
-        run: ./mvnw -B verify
+      - name: Build & test with Maven
+        run: mvn -B verify
