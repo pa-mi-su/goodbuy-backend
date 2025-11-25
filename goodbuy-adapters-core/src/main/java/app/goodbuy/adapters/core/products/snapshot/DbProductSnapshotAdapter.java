@@ -94,19 +94,23 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                     .orElse(null);
         }
 
+        log.warn("🟪 [IMG] primaryExternalUrl resolved for ean={} → {}", ean14, primaryExternalUrl);
         product.setPrimaryImageUrl(primaryExternalUrl);
 
         // 🔹 Mirror primary image to S3 if present
         if (primaryExternalUrl != null && !primaryExternalUrl.isBlank()) {
+            log.warn("🟦 [IMG] Attempting S3 mirror for ean={} url={}", ean14, primaryExternalUrl);
             try {
                 String s3Url = mirrorExternalImageToS3(ean14, primaryExternalUrl.trim());
                 product.setPrimaryImageS3Url(s3Url);
-                log.info("DbProductSnapshotAdapter: set primary_image_s3_url for {} → {}", ean14, s3Url);
+                log.info("🟩 [IMG] DbProductSnapshotAdapter: set primary_image_s3_url for {} → {}", ean14, s3Url);
             } catch (Exception ex) {
                 // Non-fatal: we still persist product + primary_image_url
-                log.warn("DbProductSnapshotAdapter: failed to mirror external image for ean={} url={} err={}",
-                        ean14, primaryExternalUrl, ex.toString());
+                log.error("🟥 [IMG] DbProductSnapshotAdapter: failed to mirror external image for ean={} url={}",
+                        ean14, primaryExternalUrl, ex);
             }
+        } else {
+            log.warn("🟪 [IMG] No primaryExternalUrl present for ean={}, skipping S3 mirror", ean14);
         }
 
         product = productRepo.save(product);
@@ -192,7 +196,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     // ───────────────────────────────────────────────────────────────────────────
 
     private String mirrorExternalImageToS3(String ean14, String externalUrl) throws Exception {
-        log.info("DbProductSnapshotAdapter: downloading external image ean={} url={}", ean14, externalUrl);
+        log.warn("🟩 [IMG] DOWNLOAD START ean={} url={}", ean14, externalUrl);
 
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(externalUrl))
@@ -201,10 +205,13 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
         if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            log.warn("🟥 [IMG] DOWNLOAD FAIL ean={} status={} url={}", ean14, resp.statusCode(), externalUrl);
             throw new IllegalStateException("HTTP " + resp.statusCode() + " when fetching image");
         }
 
         byte[] bytes = resp.body();
+        log.warn("🟩 [IMG] DOWNLOAD OK ean={} status={} len={}", ean14, resp.statusCode(), bytes.length);
+
         String contentType = resp.headers()
                 .firstValue("Content-Type")
                 .orElse("image/jpeg");
@@ -216,8 +223,14 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 + java.util.UUID.randomUUID().toString().replace("-", "")
                 + ".jpg";
 
+        log.warn("🟧 [IMG] UPLOAD → S3 key={} bytes={} contentType={}", key, bytes.length, contentType);
+
         // ProductImageStoragePort is S3-backed (S3StorageService)
-        return imageStorage.uploadImage(key, bytes, contentType);
+        String s3Url = imageStorage.uploadImage(key, bytes, contentType);
+
+        log.warn("🟩 [IMG] S3 UPLOAD OK ean={} key={} s3Url={}", ean14, key, s3Url);
+
+        return s3Url;
     }
 
     // ───────────────────────────────────────────────────────────────────────────
