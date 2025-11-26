@@ -134,6 +134,10 @@ public class DbProductLookupAdapter implements ProductLookupPort {
         Map<String, String> titles = Collections.emptyMap();
         Map<String, String> manufacturer = Collections.emptyMap();
 
+        // For now, DB snapshots don’t carry a domain column into the entity;
+        // we tag them as "unknown". The domain filter is enforced at service level.
+        String domain = "unknown";
+
         return new ProductDetailDto(
                 product.getEan(),
                 product.getName(),
@@ -144,7 +148,8 @@ public class DbProductLookupAdapter implements ProductLookupPort {
                 ingredientDtos,
                 titles,
                 manufacturer,
-                "GOODBUY-DB"   // clearly mark this as our own DB snapshot
+                "GOODBUY-DB",   // clearly mark this as our own DB snapshot
+                domain          // new last argument to match ProductDetailDto record
         );
     }
 

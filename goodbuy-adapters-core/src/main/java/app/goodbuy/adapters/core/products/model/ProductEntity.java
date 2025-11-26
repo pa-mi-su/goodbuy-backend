@@ -2,6 +2,7 @@ package app.goodbuy.adapters.core.products.model;
 
 import jakarta.persistence.*;
 import java.time.OffsetDateTime;
+import java.util.Locale;
 
 @Entity
 @Table(name = "products")
@@ -11,7 +12,6 @@ public class ProductEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // EAN / GTIN – this is our natural key
     @Column(name = "ean", nullable = false, unique = true, length = 32)
     private String ean;
 
@@ -23,6 +23,19 @@ public class ProductEntity {
 
     @Column(name = "category", length = 255)
     private String category;
+
+    /**
+     * High-level domain for product:
+     *   "cleaning", "baby", "food", etc.
+     *   Default in DB is "unknown".
+     *
+     * IMPORTANT:
+     *   We NEVER persist null here. If callers pass null/blank,
+     *   we store "unknown" so Postgres NOT NULL is happy and
+     *   the DB default is effectively enforced on the Java side.
+     */
+    @Column(name = "domain", nullable = false, length = 64)
+    private String domain = "unknown";   // Java-side default
 
     @Column(name = "description")
     private String description;
@@ -55,6 +68,25 @@ public class ProductEntity {
 
     public String getCategory() { return category; }
     public void setCategory(String category) { this.category = category; }
+
+    public String getDomain() { return domain; }
+
+    public void setDomain(String domain) {
+        if (domain == null || domain.isBlank()) {
+            this.domain = "unknown";
+        } else {
+            this.domain = domain.trim().toLowerCase(Locale.ROOT);
+        }
+    }
+
+    @PrePersist
+    public void prePersist() {
+        if (this.domain == null || this.domain.isBlank()) {
+            this.domain = "unknown";
+        } else {
+            this.domain = this.domain.trim().toLowerCase(Locale.ROOT);
+        }
+    }
 
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
