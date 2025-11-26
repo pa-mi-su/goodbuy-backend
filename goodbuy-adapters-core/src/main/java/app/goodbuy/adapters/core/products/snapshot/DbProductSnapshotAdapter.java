@@ -6,6 +6,7 @@ import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.model.ProductIngredientEntity;
 import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
 import app.goodbuy.adapters.core.products.repo.ProductRepository;
+import app.goodbuy.core.products.domain.ProductDomainClassifier;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
 import app.goodbuy.core.storage.ProductImageStoragePort;
@@ -31,6 +32,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductIngredientRepository productIngredientRepo;
     private final IngredientRepository ingredientRepo;
     private final ProductImageStoragePort imageStorage;
+    private final ProductDomainClassifier domainClassifier;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
@@ -38,12 +40,14 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             ProductRepository productRepo,
             ProductIngredientRepository productIngredientRepo,
             IngredientRepository ingredientRepo,
-            ProductImageStoragePort imageStorage
+            ProductImageStoragePort imageStorage,
+            ProductDomainClassifier domainClassifier
     ) {
         this.productRepo = productRepo;
         this.productIngredientRepo = productIngredientRepo;
         this.ingredientRepo = ingredientRepo;
         this.imageStorage = imageStorage;
+        this.domainClassifier = domainClassifier;
     }
 
     @Override
@@ -71,12 +75,31 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 .orElseGet(ProductEntity::new);
 
         boolean isNew = (product.getId() == null);
-        if (isNew) product.setEan(ean14);
+        if (isNew) {
+            product.setEan(ean14);
+        }
 
         product.setName(dto.name());
         product.setBrand(dto.brand());
         product.setCategory(dto.category());
         product.setDescription(dto.description());
+
+        // ----------- DOMAIN CLASSIFICATION (PERSISTED) -----------
+        // Use existing DB domain as a hint (so we don't downgrade a known CLEANING, etc.).
+        String existingDomain = product.getDomain(); // may be "unknown" or null on brand new rows
+
+        ProductDomainClassifier.Domain domainEnum = domainClassifier.classify(
+                existingDomain,
+                product.getCategory(),
+                product.getName(),
+                product.getBrand()
+        );
+
+        // Persist as lowercase string ("cleaning", "baby", "food", "unknown", ...)
+        String domainStr = domainEnum.name().toLowerCase(Locale.ROOT);
+        product.setDomain(domainStr);
+
+        log.info("saveSnapshot: classified domain={} for gtin={}", domainStr, ean14);
 
         // -------- IMAGE SELECTION LOGGING --------
         List<ProductDetailDto.ImageDto> images = dto.images();
@@ -122,8 +145,8 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         // ----------- SAVE PRODUCT --------
         product = productRepo.save(product);
-        log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) s3Url={}",
-                product.getId(), product.getEan(), isNew, safe(product.getPrimaryImageS3Url()));
+        log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) domain={} s3Url={}",
+                product.getId(), product.getEan(), isNew, product.getDomain(), safe(product.getPrimaryImageS3Url()));
 
         // ----------- INGREDIENT LINKS -----------
         productIngredientRepo.deleteByProduct(product);
