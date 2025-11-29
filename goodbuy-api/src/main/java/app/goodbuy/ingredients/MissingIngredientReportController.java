@@ -8,6 +8,21 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * API endpoint for reporting missing ingredients from the mobile apps.
+ *
+ * iOS flow:
+ *  - User taps "We don't have this ingredient, notify us".
+ *  - App POSTs here with ingredient name + optional product EAN + context.
+ *
+ * Backend behavior (GLOBAL by ingredient name):
+ *  - We persist the report and, on the *first* ever report for that
+ *    ingredientName (any productEan), we send a Slack notification.
+ *  - Later calls for the same ingredientName only update the row; no extra Slack.
+ *  - `alreadyReported` in the response is:
+ *      - false → first ever time this ingredientName was seen
+ *      - true  → ingredientName has been reported before (any product)
+ */
 @RestController
 @RequestMapping("/api/v1/ingredients/missing")
 public class MissingIngredientReportController {
@@ -25,18 +40,28 @@ public class MissingIngredientReportController {
     public MissingIngredientReportResponse reportMissing(
             @RequestBody MissingIngredientReportRequest req
     ) {
-        MissingIngredientReportEntity saved = service.report(
+        MissingIngredientReportService.MissingIngredientReportResult result =
+                service.reportWithStatus(
+                        req.ingredientName(),
+                        req.productEan(),
+                        req.appVersion(),
+                        req.platform(),
+                        req.notes()
+                );
+
+        MissingIngredientReportEntity saved = result.entity();
+        boolean alreadyReported = !result.isNew();
+
+        log.info(
+                "Missing ingredient reported ingredient='{}' ean={} platform={} version={} alreadyReported={}",
                 req.ingredientName(),
                 req.productEan(),
-                req.appVersion(),
                 req.platform(),
-                req.notes()
+                req.appVersion(),
+                alreadyReported
         );
 
-        log.info("Missing ingredient reported ingredient='{}' ean={} platform={} version={}",
-                req.ingredientName(), req.productEan(), req.platform(), req.appVersion());
-
-        return new MissingIngredientReportResponse(saved.getId());
+        return new MissingIngredientReportResponse(saved.getId(), alreadyReported);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -45,11 +70,18 @@ public class MissingIngredientReportController {
 
     public record MissingIngredientReportRequest(
             @NotBlank String ingredientName,
-            String productEan,
+            String productEan,   // optional – context only
             String appVersion,
             String platform,
             String notes
     ) {}
 
-    public record MissingIngredientReportResponse(Long id) {}
+    /**
+     * id              → DB primary key of ingredient_missing_report row
+     * alreadyReported → true if this ingredientName was seen before (any productEan)
+     */
+    public record MissingIngredientReportResponse(
+            Long id,
+            boolean alreadyReported
+    ) {}
 }

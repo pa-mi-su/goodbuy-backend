@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.OffsetDateTime;
 
 @Service
@@ -17,13 +16,6 @@ public class MissingIngredientReportService {
 
     private static final Logger log =
             LoggerFactory.getLogger(MissingIngredientReportService.class);
-
-    /**
-     * How often we’re willing to send a Slack notification for the same
-     * (ingredientName, productEan) pair. Everything faster than this will
-     * still update the DB row but will NOT send another Slack.
-     */
-    private static final Duration SLACK_THROTTLE_WINDOW = Duration.ofMinutes(10);
 
     private final MissingIngredientReportRepository repo;
     private final SlackNotificationAdapter slack;
@@ -39,18 +31,34 @@ public class MissingIngredientReportService {
     }
 
     /**
-     * Persist a missing-ingredient report and (throttled) Slack notification.
+     * Lightweight result wrapper so callers (API layer) can know
+     * whether this was the *first* time we saw this ingredientName
+     * globally (any productEan) or a repeat of an already-reported one.
      *
-     * Dedup rule:
-     *  - ONE ROW per (ingredientName, productEan) in ingredient_missing_report.
-     *  - If an entry for that combination already exists, we update it.
+     *  - isNew = true  → first time this ingredientName was reported (global)
+     *  - isNew = false → ingredientName already existed (global)
+     */
+    public record MissingIngredientReportResult(
+            MissingIngredientReportEntity entity,
+            boolean isNew
+    ) {}
+
+    /**
+     * New API: persist a missing-ingredient report and (first-only) Slack notification.
+     *
+     * Dedup rule (GLOBAL):
+     *  - ONE ROW per *normalized ingredientName* in ingredient_missing_report.
+     *  - If an entry for that ingredientName already exists (any productEan),
+     *    we update it in-place.
      *  - Otherwise, we insert a new row.
      *
      * Slack rule:
-     *  - For a given (ingredientName, productEan), send at most one Slack
-     *    notification per SLACK_THROTTLE_WINDOW.
+     *  - For a given ingredientName, send Slack **only once**,
+     *    i.e. when the row is first created.
+     *
+     * productEan is optional – context only; it no longer participates in the dedup key.
      */
-    public MissingIngredientReportEntity report(
+    public MissingIngredientReportResult reportWithStatus(
             String ingredientName,
             String productEan,
             String appVersion,
@@ -59,42 +67,48 @@ public class MissingIngredientReportService {
     ) {
         OffsetDateTime now = OffsetDateTime.now();
 
-        // Defensive guards – these two are our natural key
+        // ingredientName is the global key
         if (ingredientName == null || ingredientName.isBlank()) {
-            log.warn("MissingIngredientReportService.report called with null/blank ingredientName; rejecting request");
+            log.warn("MissingIngredientReportService.reportWithStatus called with null/blank ingredientName; rejecting request");
             throw new IllegalArgumentException("ingredientName must not be null or blank");
         }
-        if (productEan == null || productEan.isBlank()) {
-            log.warn("MissingIngredientReportService.report called with null/blank productEan; rejecting request");
-            throw new IllegalArgumentException("productEan must not be null or blank");
-        }
 
-        // Compute normalized GTIN-14 form for logging / Slack
-        String productGtin14 = normalizeToGtin14(productEan);
-        log.debug("MissingIngredientReportService.report: productEan(raw)={} normalized(gtin14)={}",
-                productEan, productGtin14);
+        // productEan is OPTIONAL now; still useful for context / Slack.
+        String normalizedIngredientName = normalizeIngredientName(ingredientName);
+        String productGtin14 = normalizeToGtin14(productEan); // may be null
 
-        // 1) Insert-or-update by (ingredientName, productEan) – we keep using the raw EAN
+        log.debug("MissingIngredientReportService.reportWithStatus: ingredient(raw)='{}' normalized='{}' ean(raw)={} gtin14={}",
+                ingredientName, normalizedIngredientName, productEan, productGtin14);
+
+        // 1) Insert-or-update by ingredientName ONLY (GLOBAL by ingredient)
+        //
+        // NOTE: repo has both:
+        //   - findByIngredientNameIgnoreCase(...)
+        //   - findByIngredientNameAndProductEan(...)  (kept for any legacy use)
         MissingIngredientReportEntity e = repo
-                .findByIngredientNameAndProductEan(ingredientName, productEan)
+                .findByIngredientNameIgnoreCase(normalizedIngredientName)
                 .orElseGet(MissingIngredientReportEntity::new);
 
         boolean isNew = (e.getId() == null);
-        OffsetDateTime previousOccurredAt = e.getOccurredAt(); // may be null
 
         if (isNew) {
-            log.info("MissingIngredientReportService: creating new missing-ingredient row for ingredient='{}' ean={}",
-                    ingredientName, productEan);
-            e.setIngredientName(ingredientName);
-            e.setProductEan(productEan);
-            // If your entity has createdAt, you can set it here:
-            // e.setCreatedAt(now);
+            log.info(
+                    "MissingIngredientReportService: creating new missing-ingredient row for ingredient='{}' (global key)",
+                    normalizedIngredientName
+            );
+            // We store the normalized name as the canonical key
+            e.setIngredientName(normalizedIngredientName);
+            // createdAt / occurredAt via @PrePersist; we still set occurredAt below
         } else {
-            log.info("MissingIngredientReportService: updating existing missing-ingredient row for ingredient='{}' ean={}",
-                    ingredientName, productEan);
+            log.info(
+                    "MissingIngredientReportService: updating existing missing-ingredient row for ingredient='{}' (global key)",
+                    normalizedIngredientName
+            );
         }
 
-        // Always refresh “last seen” details
+        // Always refresh latest context.
+        // We keep the latest productEan + metadata, but they do NOT affect dedup.
+        e.setProductEan(productEan);
         e.setAppVersion(appVersion);
         e.setPlatform(platform);
         e.setNotes(notes);
@@ -102,11 +116,11 @@ public class MissingIngredientReportService {
 
         MissingIngredientReportEntity saved = repo.save(e);
 
-        // 2) Throttled Slack notification (best-effort)
-        if (shouldSendSlack(previousOccurredAt, now)) {
+        // 2) Slack notification: ONLY for brand-new rows
+        if (isNew) {
             try {
                 String text = buildSlackText(
-                        ingredientName,
+                        normalizedIngredientName,
                         productEan,
                         productGtin14,
                         appVersion,
@@ -114,7 +128,7 @@ public class MissingIngredientReportService {
                         notes
                 );
 
-                log.info("MissingIngredientReportService: calling SlackNotificationAdapter.send(...)");
+                log.info("MissingIngredientReportService: first time for ingredient='{}' → sending Slack", normalizedIngredientName);
                 slack.send(text);
                 log.info("MissingIngredientReportService: SlackNotificationAdapter.send(...) returned");
             } catch (Exception ex) {
@@ -122,27 +136,46 @@ public class MissingIngredientReportService {
             }
         } else {
             log.info(
-                    "MissingIngredientReportService: throttling Slack for ingredient='{}' ean='{}' (within {})",
-                    ingredientName,
-                    productEan,
-                    SLACK_THROTTLE_WINDOW
+                    "MissingIngredientReportService: ingredient='{}' already reported (global) → skipping Slack",
+                    normalizedIngredientName
             );
         }
 
-        return saved;
+        return new MissingIngredientReportResult(saved, isNew);
+    }
+
+    /**
+     * Backwards-compatible API for any older callers.
+     * Always returns the entity; Slack still only fires on first report.
+     */
+    public MissingIngredientReportEntity report(
+            String ingredientName,
+            String productEan,
+            String appVersion,
+            String platform,
+            String notes
+    ) {
+        return reportWithStatus(
+                ingredientName,
+                productEan,
+                appVersion,
+                platform,
+                notes
+        ).entity();
     }
 
     // ─────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────
 
-    private boolean shouldSendSlack(OffsetDateTime previousOccurredAt, OffsetDateTime now) {
-        if (previousOccurredAt == null) {
-            // New row: always send Slack
-            return true;
-        }
-        OffsetDateTime nextAllowed = previousOccurredAt.plus(SLACK_THROTTLE_WINDOW);
-        return now.isAfter(nextAllowed);
+    /**
+     * Normalize ingredient name for use as a GLOBAL key:
+     *  - trim
+     *  - lower-case
+     */
+    private String normalizeIngredientName(String raw) {
+        if (raw == null) return null;
+        return raw.trim().toLowerCase();
     }
 
     /**
@@ -171,7 +204,7 @@ public class MissingIngredientReportService {
     }
 
     private String buildSlackText(
-            String ingredientName,
+            String ingredientNameNormalized,
             String productEanRaw,
             String productGtin14,
             String appVersion,
@@ -180,7 +213,7 @@ public class MissingIngredientReportService {
     ) {
         StringBuilder sb = new StringBuilder();
         sb.append("*Missing Ingredient Reported*").append("\n");
-        sb.append("• *Name*: `").append(orDash(ingredientName)).append("`\n");
+        sb.append("• *Ingredient (normalized)*: `").append(orDash(ingredientNameNormalized)).append("`\n");
         sb.append("• *EAN (raw)*: `").append(orDash(productEanRaw)).append("`\n");
         sb.append("• *EAN (GTIN-14)*: `").append(orDash(productGtin14)).append("`\n");
         sb.append("• *Platform*: ").append(orDash(platform)).append("\n");

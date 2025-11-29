@@ -9,17 +9,23 @@ public interface MissingIngredientReportRepository
         extends JpaRepository<MissingIngredientReportEntity, Long> {
 
     /**
-     * Dedup key for missing-ingredient reports:
+     * OLD dedup key for missing-ingredient reports:
      *
      *  - ingredientName
      *  - productEan
      *
-     * This is the key for our "one row per (ingredient, EAN)" logic.
-     * A DB UNIQUE constraint should exist on (ingredient_name, product_ean)
-     * to enforce this at the database level as well.
+     * This is still available for any legacy callers that need it.
      */
     Optional<MissingIngredientReportEntity> findByIngredientNameAndProductEan(
             String ingredientName,
             String productEan
+    );
+
+    /**
+     * NEW global dedup lookup: one row per ingredientName, regardless of productEan.
+     * Service normalizes ingredientName to lower-case before calling this.
+     */
+    Optional<MissingIngredientReportEntity> findByIngredientNameIgnoreCase(
+            String ingredientName
     );
 }

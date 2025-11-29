@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.OffsetDateTime;
 
 @Service
@@ -17,12 +16,6 @@ public class MissingProductReportService {
 
     private static final Logger log =
             LoggerFactory.getLogger(MissingProductReportService.class);
-
-    /**
-     * How often we’re willing to send a Slack notification for the same EAN.
-     * Requests inside this window still update the DB row but skip Slack.
-     */
-    private static final Duration SLACK_THROTTLE_WINDOW = Duration.ofMinutes(10);
 
     private final MissingProductReportRepository repo;
     private final SlackNotificationAdapter slack;
@@ -38,7 +31,18 @@ public class MissingProductReportService {
     }
 
     /**
-     * Persist a missing-product report and (throttled) Slack notification.
+     * Small result type so callers (like the API controller) can know whether
+     * this was the first time this EAN was reported (isNew == true) or if it
+     * was already in the DB (isNew == false).
+     */
+    public record MissingProductReportResult(
+            MissingProductReportEntity entity,
+            boolean isNew
+    ) {}
+
+    /**
+     * New API: does the full insert/update + Slack-once logic, and returns
+     * both the saved entity and a flag telling you if this report was new.
      *
      * Dedup rule:
      *  - ONE ROW PER EAN in product_missing_report.
@@ -46,10 +50,10 @@ public class MissingProductReportService {
      *  - Otherwise, we insert a new row.
      *
      * Slack rule:
-     *  - For a given EAN, send at most one Slack notification per
-     *    SLACK_THROTTLE_WINDOW.
+     *  - For a given EAN, send Slack **only on the very first insert**.
+     *  - Subsequent reports update the row but do NOT send Slack again.
      */
-    public MissingProductReportEntity report(
+    public MissingProductReportResult reportWithStatus(
             String productEan,
             String productName,
             String brandName,
@@ -61,10 +65,9 @@ public class MissingProductReportService {
     ) {
         OffsetDateTime now = OffsetDateTime.now();
 
-        // Defensive guard: EAN is NOT NULL in the DB, so if we ever get here
-        // with a blank EAN, better to log loud and fail fast.
+        // Defensive guard
         if (productEan == null || productEan.isBlank()) {
-            log.warn("MissingProductReportService.report called with null/blank EAN; rejecting request");
+            log.warn("MissingProductReportService.reportWithStatus called with null/blank EAN; rejecting request");
             throw new IllegalArgumentException("productEan must not be null or blank");
         }
 
@@ -73,7 +76,6 @@ public class MissingProductReportService {
                 .orElseGet(MissingProductReportEntity::new);
 
         boolean isNew = (e.getId() == null);
-        OffsetDateTime previousOccurredAt = e.getOccurredAt(); // may be null
 
         if (isNew) {
             // First time we see this EAN → create row
@@ -91,7 +93,7 @@ public class MissingProductReportService {
         e.setPlatform(platform);
         e.setNotes(notes);
 
-        // 🔥 NEW: persist image URLs into the entity (they should map to front_image_url / back_image_url columns)
+        // Persist S3 image URLs
         e.setFrontImageS3Url(frontImageUrl);
         e.setBackImageS3Url(backImageUrl);
 
@@ -100,8 +102,8 @@ public class MissingProductReportService {
 
         MissingProductReportEntity saved = repo.save(e);
 
-        // 2) Throttled Slack notification (best-effort)
-        if (shouldSendSlack(previousOccurredAt, now)) {
+        // 2) Slack notification ONLY for brand new rows
+        if (isNew) {
             try {
                 String text = buildSlackText(
                         productEan,
@@ -114,35 +116,53 @@ public class MissingProductReportService {
                         notes
                 );
 
-                log.info("MissingProductReportService: calling SlackNotificationAdapter.send(...)");
+                log.info("MissingProductReportService: first time for ean='{}' → sending Slack", productEan);
                 slack.send(text);
-                log.info("MissingProductReportService: SlackNotificationAdapter.send(...) returned");
             } catch (Exception ex) {
                 log.warn("MissingProductReportService: failed to send Slack notification: {}", ex.toString());
             }
         } else {
-            log.info(
-                    "MissingProductReportService: throttling Slack for ean='{}' (within {})",
-                    productEan,
-                    SLACK_THROTTLE_WINDOW
-            );
+            log.info("MissingProductReportService: ean='{}' already reported → skipping Slack", productEan);
         }
 
-        return saved;
+        return new MissingProductReportResult(saved, isNew);
+    }
+
+    /**
+     * Old API kept for backwards compatibility.
+     *
+     * Existing callers still compile and behave the same, just ignoring
+     * the "isNew / alreadyReported" status.
+     *
+     * The controller will be moved to use reportWithStatus(...) in the
+     * next step so it can tell the app if this was already reported.
+     */
+    public MissingProductReportEntity report(
+            String productEan,
+            String productName,
+            String brandName,
+            String frontImageUrl,
+            String backImageUrl,
+            String appVersion,
+            String platform,
+            String notes
+    ) {
+        MissingProductReportResult result = reportWithStatus(
+                productEan,
+                productName,
+                brandName,
+                frontImageUrl,
+                backImageUrl,
+                appVersion,
+                platform,
+                notes
+        );
+        return result.entity();
     }
 
     // ─────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────
-
-    private boolean shouldSendSlack(OffsetDateTime previousOccurredAt, OffsetDateTime now) {
-        if (previousOccurredAt == null) {
-            // New row: always send Slack
-            return true;
-        }
-        OffsetDateTime nextAllowed = previousOccurredAt.plus(SLACK_THROTTLE_WINDOW);
-        return now.isAfter(nextAllowed);
-    }
 
     private String buildSlackText(
             String productEan,
