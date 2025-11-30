@@ -6,8 +6,9 @@ import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.model.ProductIngredientEntity;
 import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
 import app.goodbuy.adapters.core.products.repo.ProductRepository;
-import app.goodbuy.core.products.domain.ProductDomainClassifier;
+import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.port.ProductDomainResolverPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
 import app.goodbuy.core.storage.ProductImageStoragePort;
 import org.slf4j.Logger;
@@ -32,7 +33,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductIngredientRepository productIngredientRepo;
     private final IngredientRepository ingredientRepo;
     private final ProductImageStoragePort imageStorage;
-    private final ProductDomainClassifier domainClassifier;
+
+    // ✅ Use the port, not a concrete classifier
+    private final ProductDomainResolverPort domainResolver;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
@@ -41,13 +44,13 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             ProductIngredientRepository productIngredientRepo,
             IngredientRepository ingredientRepo,
             ProductImageStoragePort imageStorage,
-            ProductDomainClassifier domainClassifier
+            ProductDomainResolverPort domainResolver
     ) {
         this.productRepo = productRepo;
         this.productIngredientRepo = productIngredientRepo;
         this.ingredientRepo = ingredientRepo;
         this.imageStorage = imageStorage;
-        this.domainClassifier = domainClassifier;
+        this.domainResolver = domainResolver;
     }
 
     @Override
@@ -88,7 +91,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         // Use existing DB domain as a hint (so we don't downgrade a known CLEANING, etc.).
         String existingDomain = product.getDomain(); // may be "unknown" or null on brand new rows
 
-        ProductDomainClassifier.Domain domainEnum = domainClassifier.classify(
+        ProductDomain domainEnum = domainResolver.classify(
                 existingDomain,
                 product.getCategory(),
                 product.getName(),
@@ -175,7 +178,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
             String canonicalKey = keyCand.trim().toLowerCase(Locale.ROOT);
 
-            // --- NEW: ensure an Ingredient row exists (skeleton if needed) ---
+            // --- ensure an Ingredient row exists (skeleton if needed) ---
             Ingredient ingredient = ingredientRepo
                     .findByCanonicalKeyIgnoreCase(canonicalKey)
                     .orElseGet(() -> {
