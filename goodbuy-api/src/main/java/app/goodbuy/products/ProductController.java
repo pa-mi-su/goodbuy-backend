@@ -1,9 +1,9 @@
 package app.goodbuy.products;
 
 import app.goodbuy.core.ingredients.dto.IngredientDTO;
-import app.goodbuy.core.products.domain.ProductDomainClassifier;
-import app.goodbuy.core.products.domain.ProductDomainClassifier.Domain;
+import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.port.ProductDomainResolverPort;
 import app.goodbuy.ingredients.IngredientReadService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -43,16 +43,16 @@ public class ProductController {
     private final ProductService service;
     private final ObjectMapper objectMapper;
     private final IngredientReadService ingredientReadService;
-    private final ProductDomainClassifier domainClassifier;
+    private final ProductDomainResolverPort productDomainResolver;
 
     public ProductController(ProductService service,
                              ObjectMapper objectMapper,
                              IngredientReadService ingredientReadService,
-                             ProductDomainClassifier domainClassifier) {
+                             ProductDomainResolverPort productDomainResolver) {
         this.service = service;
         this.objectMapper = objectMapper;
         this.ingredientReadService = ingredientReadService;
-        this.domainClassifier = domainClassifier;
+        this.productDomainResolver = productDomainResolver;
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -234,8 +234,8 @@ public class ProductController {
             return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
         }
 
-        // Domain gate via classifier: this is our canonical spec.
-        Domain domainEnum = domainClassifier.classify(
+        // Domain gate via resolver (DB-driven rules behind a port).
+        ProductDomain domainEnum = productDomainResolver.classify(
                 dto.domain(),     // structured domain string from DB/upstream, if any
                 dto.category(),
                 dto.name(),
@@ -246,7 +246,7 @@ public class ProductController {
         String domain = domainEnum.name().toLowerCase(Locale.ROOT);
 
         // Only CLEANING is currently "supported" for rating.
-        boolean categorySupported = (domainEnum == Domain.CLEANING);
+        boolean categorySupported = (domainEnum == ProductDomain.CLEANING);
         if (!categorySupported) {
             log.info("ProductController.getProduct: domain_not_supported gtin14={} domain={}",
                     gtin14, domain);
