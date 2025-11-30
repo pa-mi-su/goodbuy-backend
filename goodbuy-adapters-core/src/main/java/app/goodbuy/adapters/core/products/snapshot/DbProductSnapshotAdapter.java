@@ -163,32 +163,50 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         for (ProductDetailDto.IngredientDto ing : dtoIngredients) {
             if (ing == null) continue;
 
+            // What we show to users
             String displayName = firstNonBlank(
                     ing.original(), ing.canonical(), ing.id());
             if (displayName == null) continue;
 
+            // What we store as canonical_key
             String keyCand = firstNonBlank(
                     ing.canonical(), ing.original(), ing.id());
             if (keyCand == null) continue;
 
             String canonicalKey = keyCand.trim().toLowerCase(Locale.ROOT);
 
-            Optional<Ingredient> optIng = ingredientRepo.findByCanonicalKeyIgnoreCase(canonicalKey);
+            // --- NEW: ensure an Ingredient row exists (skeleton if needed) ---
+            Ingredient ingredient = ingredientRepo
+                    .findByCanonicalKeyIgnoreCase(canonicalKey)
+                    .orElseGet(() -> {
+                        Ingredient created = new Ingredient();
+                        created.setCanonicalKey(canonicalKey);
+                        created.setDisplayName(displayName);
+                        // Start active; ratingLetter/safetyScore/etc. remain null.
+                        created.setActive(true);
 
-            if (optIng.isEmpty()) {
-                log.debug("saveSnapshot: missing ingredient canonicalKey='{}'", canonicalKey);
+                        Ingredient saved = ingredientRepo.save(created);
+                        log.info(
+                                "saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
+                                saved.getId(), canonicalKey, safe(displayName)
+                        );
+                        return saved;
+                    });
+
+            Long id = ingredient.getId();
+            if (id == null) {
+                log.warn("saveSnapshot: ingredient entity has null id for canonicalKey='{}' — skipping link", canonicalKey);
                 continue;
             }
 
-            Ingredient i = optIng.get();
-            Long id = i.getId();
-            if (id == null) continue;
-
-            if (!seen.add(id)) continue; // dedupe
+            if (!seen.add(id)) {
+                // already linked in this snapshot loop
+                continue;
+            }
 
             ProductIngredientEntity link = new ProductIngredientEntity();
             link.setProduct(product);
-            link.setIngredient(i);
+            link.setIngredient(ingredient);
             link.setDisplayName(displayName);
 
             productIngredientRepo.save(link);
