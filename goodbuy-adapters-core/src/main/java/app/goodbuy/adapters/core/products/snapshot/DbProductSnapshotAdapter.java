@@ -22,7 +22,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
 
 @Component
 public class DbProductSnapshotAdapter implements ProductSnapshotPort {
@@ -166,35 +170,56 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         for (ProductDetailDto.IngredientDto ing : dtoIngredients) {
             if (ing == null) continue;
 
-            // What we show to users
+            // What we show to users (best human-facing label we have)
             String displayName = firstNonBlank(
                     ing.original(), ing.canonical(), ing.id());
             if (displayName == null) continue;
 
-            // What we store as canonical_key
-            String keyCand = firstNonBlank(
+            // What we use as the canonical_key / normalized needle
+            String rawKeyCandidate = firstNonBlank(
                     ing.canonical(), ing.original(), ing.id());
-            if (keyCand == null) continue;
+            if (rawKeyCandidate == null) continue;
 
-            String canonicalKey = keyCand.trim().toLowerCase(Locale.ROOT);
+            String canonicalKey = rawKeyCandidate.trim().toLowerCase(Locale.ROOT);
+            String needle = canonicalKey; // already lowercased
 
-            // --- ensure an Ingredient row exists (skeleton if needed) ---
-            Ingredient ingredient = ingredientRepo
+            // --- Try to resolve an existing Ingredient before creating a new one ---
+
+            Ingredient ingredient = null;
+
+            // 1) Exact canonical_key match (case-insensitive)
+            ingredient = ingredientRepo
                     .findByCanonicalKeyIgnoreCase(canonicalKey)
-                    .orElseGet(() -> {
-                        Ingredient created = new Ingredient();
-                        created.setCanonicalKey(canonicalKey);
-                        created.setDisplayName(displayName);
-                        // Start active; ratingLetter/safetyScore/etc. remain null.
-                        created.setActive(true);
+                    .orElse(null);
 
-                        Ingredient saved = ingredientRepo.save(created);
-                        log.info(
-                                "saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
-                                saved.getId(), canonicalKey, safe(displayName)
-                        );
-                        return saved;
-                    });
+            // 2) If not found, try alias/name-based resolution
+            if (ingredient == null) {
+                List<Ingredient> candidates = ingredientRepo.findByAllNormalized(needle);
+                if (!candidates.isEmpty()) {
+                    ingredient = candidates.get(0); // first is fine; we de-dup via IDs anyway
+                    log.info(
+                            "saveSnapshot: matched ingredient via alias/name needle='{}' → id={} canonicalKey='{}'",
+                            needle,
+                            ingredient.getId(),
+                            safe(ingredient.getCanonicalKey())
+                    );
+                }
+            }
+
+            // 3) If still not found, create a skeleton ingredient
+            if (ingredient == null) {
+                Ingredient created = new Ingredient();
+                created.setCanonicalKey(canonicalKey);
+                created.setDisplayName(displayName);
+                // Start active; ratingLetter/safetyScore/etc. remain null.
+                created.setActive(true);
+
+                ingredient = ingredientRepo.save(created);
+                log.info(
+                        "saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
+                        ingredient.getId(), canonicalKey, safe(displayName)
+                );
+            }
 
             Long id = ingredient.getId();
             if (id == null) {
