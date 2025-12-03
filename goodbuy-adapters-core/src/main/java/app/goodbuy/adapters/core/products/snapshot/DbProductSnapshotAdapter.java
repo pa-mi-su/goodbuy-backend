@@ -1,16 +1,19 @@
 package app.goodbuy.adapters.core.products.snapshot;
 
-import app.goodbuy.adapters.core.ingredients.IngredientRepository;
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
+import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.model.ProductIngredientEntity;
 import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
 import app.goodbuy.adapters.core.products.repo.ProductRepository;
+import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductDomainResolverPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
 import app.goodbuy.core.storage.ProductImageStoragePort;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,24 +40,28 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductIngredientRepository productIngredientRepo;
     private final IngredientRepository ingredientRepo;
     private final ProductImageStoragePort imageStorage;
-
-    // ✅ Use the port, not a concrete classifier
     private final ProductDomainResolverPort domainResolver;
+    private final ProductScoringAdapterService productScoringAdapter;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
+
+    @PersistenceContext
+    private EntityManager em;
 
     public DbProductSnapshotAdapter(
             ProductRepository productRepo,
             ProductIngredientRepository productIngredientRepo,
             IngredientRepository ingredientRepo,
             ProductImageStoragePort imageStorage,
-            ProductDomainResolverPort domainResolver
+            ProductDomainResolverPort domainResolver,
+            ProductScoringAdapterService productScoringAdapter
     ) {
         this.productRepo = productRepo;
         this.productIngredientRepo = productIngredientRepo;
         this.ingredientRepo = ingredientRepo;
         this.imageStorage = imageStorage;
         this.domainResolver = domainResolver;
+        this.productScoringAdapter = productScoringAdapter;
     }
 
     @Override
@@ -92,8 +99,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         product.setDescription(dto.description());
 
         // ----------- DOMAIN CLASSIFICATION (PERSISTED) -----------
-        // Use existing DB domain as a hint (so we don't downgrade a known CLEANING, etc.).
-        String existingDomain = product.getDomain(); // may be "unknown" or null on brand new rows
+        String existingDomain = product.getDomain(); // may be "unknown" or null
 
         ProductDomain domainEnum = domainResolver.classify(
                 existingDomain,
@@ -102,7 +108,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 product.getBrand()
         );
 
-        // Persist as lowercase string ("cleaning", "baby", "food", "unknown", ...)
         String domainStr = domainEnum.name().toLowerCase(Locale.ROOT);
         product.setDomain(domainStr);
 
@@ -155,48 +160,54 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) domain={} s3Url={}",
                 product.getId(), product.getEan(), isNew, product.getDomain(), safe(product.getPrimaryImageS3Url()));
 
-        // ----------- INGREDIENT LINKS -----------
-        productIngredientRepo.deleteByProduct(product);
-
+        // ----------- INGREDIENT LINKS (IDEMPOTENT) -----------
         List<ProductDetailDto.IngredientDto> dtoIngredients = dto.ingredients();
         if (dtoIngredients == null || dtoIngredients.isEmpty()) {
             log.info("saveSnapshot: no ingredients for gtin={} — DONE", ean14);
             return;
         }
 
+        // Collect existing ingredient IDs already linked to this product
+        Set<Long> existingIngredientIds = new HashSet<>();
+        if (product.getProductIngredients() != null) {
+            for (ProductIngredientEntity existingLink : product.getProductIngredients()) {
+                if (existingLink.getIngredient() != null &&
+                        existingLink.getIngredient().getId() != null) {
+                    existingIngredientIds.add(existingLink.getIngredient().getId());
+                }
+            }
+        }
+
         int linked = 0;
-        Set<Long> seen = new HashSet<>();
+        int skippedExisting = 0;
+        Set<Long> seenInThisSnapshot = new HashSet<>();
 
         for (ProductDetailDto.IngredientDto ing : dtoIngredients) {
             if (ing == null) continue;
 
-            // What we show to users (best human-facing label we have)
             String displayName = firstNonBlank(
                     ing.original(), ing.canonical(), ing.id());
             if (displayName == null) continue;
 
-            // What we use as the canonical_key / normalized needle
             String rawKeyCandidate = firstNonBlank(
                     ing.canonical(), ing.original(), ing.id());
             if (rawKeyCandidate == null) continue;
 
             String canonicalKey = rawKeyCandidate.trim().toLowerCase(Locale.ROOT);
-            String needle = canonicalKey; // already lowercased
-
-            // --- Try to resolve an existing Ingredient before creating a new one ---
+            String needle = canonicalKey;
 
             Ingredient ingredient = null;
 
-            // 1) Exact canonical_key match (case-insensitive)
+            // 1) Exact canonical_key match
             ingredient = ingredientRepo
                     .findByCanonicalKeyIgnoreCase(canonicalKey)
                     .orElse(null);
 
-            // 2) If not found, try alias/name-based resolution
+            // 2) Alias/name-based resolution
             if (ingredient == null) {
                 List<Ingredient> candidates = ingredientRepo.findByAllNormalized(needle);
                 if (!candidates.isEmpty()) {
-                    ingredient = candidates.get(0); // first is fine; we de-dup via IDs anyway
+                    ingredient = candidates.get(0);
                     log.info(
                             "saveSnapshot: matched ingredient via alias/name needle='{}' → id={} canonicalKey='{}'",
                             needle,
@@ -206,12 +217,11 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 }
             }
 
-            // 3) If still not found, create a skeleton ingredient
+            // 3) Skeleton ingredient
             if (ingredient == null) {
                 Ingredient created = new Ingredient();
                 created.setCanonicalKey(canonicalKey);
                 created.setDisplayName(displayName);
-                // Start active; ratingLetter/safetyScore/etc. remain null.
                 created.setActive(true);
 
                 ingredient = ingredientRepo.save(created);
@@ -227,8 +237,20 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 continue;
             }
 
-            if (!seen.add(id)) {
-                // already linked in this snapshot loop
+            // Avoid multiple links to the same ingredient within this single snapshot call
+            if (!seenInThisSnapshot.add(id)) {
+                continue;
+            }
+
+            // Avoid inserting a duplicate (product_id, ingredient_id) pair if it already exists in DB
+            if (existingIngredientIds.contains(id)) {
+                skippedExisting++;
+                log.debug(
+                        "saveSnapshot: skipping existing product_ingredient link product_id={} ingredient_id={} canonicalKey='{}'",
+                        product.getId(),
+                        id,
+                        canonicalKey
+                );
                 continue;
             }
 
@@ -238,10 +260,33 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             link.setDisplayName(displayName);
 
             productIngredientRepo.save(link);
+            existingIngredientIds.add(id); // keep our in-memory set in sync
             linked++;
         }
 
-        log.info("saveSnapshot: linked {} ingredients → gtin={}", linked, ean14);
+        log.info("saveSnapshot: linked {} NEW ingredients, skippedExisting={} → gtin={}",
+                linked, skippedExisting, ean14);
+
+        // 🔴 CRITICAL: flush pending inserts so ProductScoringAdapterService
+        // can see the new product_ingredients rows when it re-loads the product.
+        em.flush();
+        log.debug("saveSnapshot: JPA flush complete before product scoring for gtin={}", ean14);
+
+        // ----------- PRODUCT SCORE (PERSISTED) -----------
+        try {
+            var scoreResult = productScoringAdapter.scoreProduct(product);
+            log.info(
+                    "saveSnapshot: product score computed gtin={} result={}",
+                    ean14,
+                    scoreResult
+            );
+        } catch (Exception ex) {
+            log.warn(
+                    "saveSnapshot: product scoring FAILED for gtin={} err={}",
+                    ean14,
+                    ex.toString()
+            );
+        }
     }
 
     // ----------- S3 MIRRORING -----------
