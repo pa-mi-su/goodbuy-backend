@@ -14,8 +14,6 @@ public record ProductDetailDto(
         Map<String, String> titles,          // e.g., { "en": "Name", "fr": "Nom" }
         Map<String, String> manufacturer,    // e.g., { "id": "mrs-meyer-s-s-c-johnson", "en": "Mrs Meyer's" }
         String source,                       // "EAN-DB", etc.
-
-        // NEW field — clean, DB-driven
         String domain                        // "cleaning", "baby", "food", "unknown"
 ) {
     public record ImageDto(

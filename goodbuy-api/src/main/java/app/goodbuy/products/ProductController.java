@@ -32,6 +32,10 @@ import java.util.*;
  *   - We only RATE products whose domain == CLEANING.
  *   - Other domains (food, baby, unknown, etc.) still return a ProductView, but
  *     with categorySupported=false and no GoodBuy ratings attached.
+ *
+ *   - NEW: For supported domains, we ONLY attach a product-level rating if we have
+ *     coverage (a score) for ALL ingredients on the label. If we’re missing even
+ *     one, product-level safetyScore/ratingLetter are null.
  */
 @Validated
 @RestController
@@ -81,8 +85,11 @@ public class ProductController {
      *
      *  - domain: our coarse category ("cleaning", "baby", "food", "unknown", ...)
      *  - categorySupported:
-     *       true  → we attach GoodBuy ratings
+     *       true  → we attach GoodBuy ratings (subject to coverage rules)
      *       false → we do NOT rate; client should show "not rated yet" UX
+     *
+     *  - safetyScore / ratingLetter at PRODUCT level:
+     *       derived from ingredients, but ONLY when we have full coverage.
      */
     public record ProductView(
             String gtin,
@@ -96,7 +103,9 @@ public class ProductController {
             List<IngredientView> ingredients,
             List<String> claims,
             List<String> hazards,
-            String source
+            String source,
+            BigDecimal safetyScore,   // product-level score
+            String ratingLetter       // product-level letter
     ) {
         static ProductView of(ProductDetailDto dto,
                               String source,
@@ -114,18 +123,15 @@ public class ProductController {
                             .distinct()
                             .toList();
 
-            // Best single image – front-end can just bind to this
             String primaryImageUrl = imageUrls.isEmpty() ? null : imageUrls.get(0);
 
-            // Ingredients:
-            //   - If categorySupported == true → resolve via GoodBuy ingredient catalog.
-            //   - If false → return "raw" ingredient labels only, with NO ratings.
+            // Build ingredient views + collect data for product-level score
             List<IngredientView> ingredientViews;
 
             if (dto.ingredients() == null) {
                 ingredientViews = List.of();
             } else if (!categorySupported) {
-                // Not a supported domain: still expose labels, but no GoodBuy rating.
+                // Unsupported domain → labels only, no GoodBuy rating
                 ingredientViews = dto.ingredients().stream()
                         .filter(Objects::nonNull)
                         .map(i -> {
@@ -140,7 +146,6 @@ public class ProductController {
                             if (label == null || label.isBlank()) {
                                 return null;
                             }
-                            // No catalog lookup, no rating
                             return new IngredientView(
                                     label,
                                     null,
@@ -153,7 +158,7 @@ public class ProductController {
                         .distinct()
                         .toList();
             } else {
-                // Supported domain (currently: cleaning) → full rating behavior
+                // Supported domain → resolve & rate via GoodBuy DB
                 ingredientViews = dto.ingredients().stream()
                         .filter(Objects::nonNull)
                         .map(i -> {
@@ -170,7 +175,12 @@ public class ProductController {
                                 return null;
                             }
 
-                            Optional<IngredientDTO> opt = ingredientReadService.searchRanked(label);
+                            // Prefer canonical key for search if present, else fallback to label
+                            String searchKey = (i.canonical() != null && !i.canonical().isBlank())
+                                    ? i.canonical().trim()
+                                    : label;
+
+                            Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey);
                             if (opt.isPresent()) {
                                 IngredientDTO ing = opt.get();
                                 return new IngredientView(
@@ -181,7 +191,7 @@ public class ProductController {
                                         ing.safetyScore()
                                 );
                             } else {
-                                // Not in DB yet → white leaf on the client
+                                // Not in DB yet → white leaf
                                 return new IngredientView(
                                         label,
                                         null,
@@ -196,6 +206,45 @@ public class ProductController {
                         .toList();
             }
 
+            // ── Product-level scoring with FULL COVERAGE requirement ──────────
+            BigDecimal productScore = null;
+            String productRating = null;
+
+            if (categorySupported) {
+                long totalIngredients = ingredientViews.size();
+                long ratedIngredients = ingredientViews.stream()
+                        .filter(IngredientView::inCatalog)
+                        .filter(iv -> iv.safetyScore() != null)
+                        .count();
+
+                boolean fullCoverage = totalIngredients > 0 && ratedIngredients == totalIngredients;
+
+                if (fullCoverage) {
+                    // V1 product score: based on WORST (lowest) ingredient score we know about,
+                    // but ONLY when we have data for all ingredients.
+                    for (IngredientView iv : ingredientViews) {
+                        if (!iv.inCatalog()) {
+                            continue;
+                        }
+                        BigDecimal s = iv.safetyScore();
+                        if (s == null) {
+                            continue;
+                        }
+                        if (productScore == null || s.compareTo(productScore) < 0) {
+                            productScore = s;
+                            productRating = iv.ratingLetter();
+                        }
+                    }
+                } else {
+                    log.debug(
+                            "ProductController: not assigning product-level rating for gtin={} (ratedIngredients={} totalIngredients={})",
+                            dto.gtin(),
+                            ratedIngredients,
+                            totalIngredients
+                    );
+                }
+            }
+
             return new ProductView(
                     dto.gtin(),
                     dto.name(),
@@ -208,7 +257,9 @@ public class ProductController {
                     ingredientViews,
                     List.of(),
                     List.of(),
-                    source
+                    source,
+                    productScore,
+                    productRating
             );
         }
     }
@@ -292,7 +343,7 @@ public class ProductController {
                 .body(view);
     }
 
-    // ── Detail endpoint (unchanged – still returns full DTO) ──────────────────
+    // ── Detail endpoint (full DTO) ────────────────────────────────────────────
 
     @GetMapping("/{code}/detail")
     public ResponseEntity<?> getProductDetail(@PathVariable("code") String rawCode,

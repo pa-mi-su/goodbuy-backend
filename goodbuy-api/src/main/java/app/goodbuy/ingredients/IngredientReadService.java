@@ -1,7 +1,7 @@
 package app.goodbuy.ingredients;
 
 import app.goodbuy.adapters.core.ingredients.IngredientMapper;
-import app.goodbuy.adapters.core.ingredients.IngredientRepository;
+import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import org.springframework.stereotype.Service;
