@@ -24,7 +24,21 @@ import java.util.List;
  *  - Runs the pure ProductScoringEngine
  *  - WRITES safety_score + rating_letter back to the products table
  *
- * Now also supports a batch operation to recalc ALL products.
+ * Semantics (🚨 important, matches your UX copy):
+ *
+ *  - If there is NO ingredient list at all for this product:
+ *      -> product.safety_score and rating_letter are set to NULL
+ *      -> we return ProductScoreResult with ratingLetter="NR"
+ *
+ *  - If there IS an ingredient list, but SOME ingredients are missing scores:
+ *      -> we DO NOT compute or persist an overall product score
+ *      -> product.safety_score and rating_letter are set to NULL
+ *      -> we return ProductScoreResult.unrated(...) explaining that we only
+ *         have GoodBuy data for X of Y ingredients, so we withhold the score.
+ *
+ *  - Only when ALL ingredients have scores:
+ *      -> we run ProductScoringEngine over the fully-scored list
+ *      -> product.safety_score and rating_letter are persisted (A–F, etc.)
  */
 @Service
 public class ProductScoringAdapterService {
@@ -38,20 +52,6 @@ public class ProductScoringAdapterService {
 
     /**
      * Compute and persist score for a single product.
-     *
-     * IMPORTANT:
-     *  - We DO NOT trust whatever ProductEntity instance the caller gives us.
-     *  - We re-load the product from the DB so that productIngredients reflects
-     *    the newly-inserted rows in product_ingredients.
-     *  - We persist the resulting safety_score + rating_letter back onto the product row.
-     *
-     * Semantics:
-     *  - If there is NO ingredient list at all for this product:
-     *      -> product.safety_score and rating_letter are set to NULL
-     *      -> we return ProductScoreResult with ratingLetter="NR"
-     *  - If there IS an ingredient list, but some ingredients are missing scores:
-     *      -> we use a neutral-ish fallback (50 / C) for those ingredients
-     *      -> the engine still returns a rated product (A–F)
      */
     @Transactional
     public ProductScoreResult scoreProduct(ProductEntity product) {
@@ -67,8 +67,7 @@ public class ProductScoringAdapterService {
         }
 
         // ─────────────────────────────────────
-        // If there are NO product_ingredients rows at all:
-        //  -> this product is UNRATED ("NR").
+        // Case 1: NO ingredient list at all → UNRATED
         // ─────────────────────────────────────
         if (managed.getProductIngredients() == null || managed.getProductIngredients().isEmpty()) {
             managed.setSafetyScore(null);
@@ -84,24 +83,22 @@ public class ProductScoringAdapterService {
                     managed.getEan()
             );
 
-            // Managed entity will flush at tx commit
-            return result;
+            return result; // managed entity will flush on tx commit
         }
 
+        int totalIngredients = managed.getProductIngredients().size();
         List<IngredientScoreResult> ingredientScores = new ArrayList<>();
+        int scoredCount = 0;
 
+        // Collect ONLY fully-scored ingredients
         managed.getProductIngredients().forEach(link -> {
             var ing = link.getIngredient();
+            if (ing == null) {
+                return;
+            }
 
-            // Default protection if ingredient has no score yet
             if (ing.getSafetyScore() == null || ing.getRatingLetter() == null) {
-                ingredientScores.add(
-                        new IngredientScoreResult(
-                                50,
-                                "C",
-                                List.of("No ingredient score available")
-                        )
-                );
+                // Missing ingredient score → counted as "unscored", but we do NOT fake a 50/C anymore.
                 return;
             }
 
@@ -114,37 +111,86 @@ public class ProductScoringAdapterService {
             );
         });
 
-        // Run pure engine (we know ingredientScores is non-empty here)
+        scoredCount = ingredientScores.size();
+
+        // ─────────────────────────────────────
+        // Case 2: We have ingredients, but ZERO have scores → UNRATED
+        // ─────────────────────────────────────
+        if (scoredCount == 0) {
+            managed.setSafetyScore(null);
+            managed.setRatingLetter(null);
+
+            ProductScoreResult result = ProductScoreResult.unrated(
+                    "No ingredient scores available yet for this product."
+            );
+
+            log.info(
+                    "Product scoring: id={} ean={} -> UNRATED (0 of {} ingredients have scores)",
+                    managed.getId(),
+                    managed.getEan(),
+                    totalIngredients
+            );
+
+            return result;
+        }
+
+        // ─────────────────────────────────────
+        // Case 3: Partial coverage (some scored, some not) → UNRATED
+        // This matches your UX: show ingredient-level info, BUT
+        // DO NOT attach an overall product score until we have them ALL.
+        // ─────────────────────────────────────
+        if (scoredCount < totalIngredients) {
+            managed.setSafetyScore(null);
+            managed.setRatingLetter(null);
+
+            String msg = String.format(
+                    "We only have GoodBuy data for %d of %d ingredients; " +
+                            "until we have them all, we won't attach an overall safety score.",
+                    scoredCount,
+                    totalIngredients
+            );
+
+            ProductScoreResult result = ProductScoreResult.unrated(msg);
+
+            log.info(
+                    "Product scoring: id={} ean={} -> UNRATED (partial coverage {}/{})",
+                    managed.getId(),
+                    managed.getEan(),
+                    scoredCount,
+                    totalIngredients
+            );
+
+            return result;
+        }
+
+        // ─────────────────────────────────────
+        // Case 4: FULL coverage → compute and persist real product score
+        // ─────────────────────────────────────
         ProductScoreResult result = engine.score(ingredientScores);
 
-        // Persist back onto the managed ProductEntity
-        // (Engine currently only returns rated scores when list is non-empty.)
         managed.setSafetyScore(BigDecimal.valueOf(result.safetyScore()));
         managed.setRatingLetter(result.ratingLetter());
 
         log.info(
-                "Product scoring: id={} ean={} -> score={} grade={}",
+                "Product scoring: id={} ean={} -> score={} grade={} (full coverage {}/{})",
                 managed.getId(),
                 managed.getEan(),
                 result.safetyScore(),
-                result.ratingLetter()
+                result.ratingLetter(),
+                scoredCount,
+                totalIngredients
         );
 
-        // No explicit save() needed – managed entity will flush at tx commit
         return result;
     }
 
     /**
      * Batch: recompute and persist scores for ALL products.
      *
-     * This is the "do it right" batch job:
-     *  - loads products from the DB,
-     *  - for each product, calls scoreProduct(...),
-     *  - writes safety_score + rating_letter back to the products table.
-     *
-     * Later you can:
-     *  - Narrow this to CLEANING domain only (see TODO below),
-     *  - Hang an admin endpoint or CLI command on top of this.
+     * Honors the same semantics as scoreProduct(...):
+     *  - no ingredient list      → UNRATED (NULL columns)
+     *  - partial ingredient data → UNRATED (NULL columns)
+     *  - full ingredient data    → real score + letter persisted
      *
      * @return number of products that were processed (rated or unrated)
      */
@@ -152,13 +198,6 @@ public class ProductScoringAdapterService {
     public int recalcScoresForAllProducts() {
         log.info("ProductScoringAdapterService: starting batch product rescoring for ALL products…");
 
-        // TODO (optional): If you have a domain field and want only CLEANING products,
-        // replace this with e.g.:
-        //
-        //   SELECT p FROM ProductEntity p WHERE p.domain = :domain
-        //
-        // and setParameter("domain", ProductDomain.CLEANING)
-        //
         TypedQuery<ProductEntity> query = em.createQuery(
                 "SELECT p FROM ProductEntity p",
                 ProductEntity.class
@@ -171,7 +210,6 @@ public class ProductScoringAdapterService {
 
         for (ProductEntity p : products) {
             try {
-                // This will re-load the product by ID and persist the new score/letter or NR.
                 scoreProduct(p);
                 processed++;
             } catch (Exception ex) {
