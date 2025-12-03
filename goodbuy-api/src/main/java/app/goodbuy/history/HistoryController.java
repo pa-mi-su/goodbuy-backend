@@ -3,6 +3,7 @@ package app.goodbuy.history;
 import app.goodbuy.adapters.core.history.ScanHistoryMapper;
 import app.goodbuy.adapters.core.history.model.ScanHistoryEntity;
 import app.goodbuy.adapters.core.history.repo.ScanHistoryRepository;
+import app.goodbuy.adapters.core.users.service.AppUserService;   // 👈 NEW IMPORT
 import app.goodbuy.core.history.dto.ScanHistoryDTO;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -26,9 +27,12 @@ public class HistoryController {
     private static final Logger log = LoggerFactory.getLogger(HistoryController.class);
 
     private final ScanHistoryRepository historyRepository;
+    private final AppUserService appUserService;   // 👈 NEW FIELD
 
-    public HistoryController(ScanHistoryRepository historyRepository) {
+    public HistoryController(ScanHistoryRepository historyRepository,
+                             AppUserService appUserService) {   // 👈 UPDATED CTOR
         this.historyRepository = historyRepository;
+        this.appUserService = appUserService;
     }
 
     // ─────────────────────────────────────
@@ -75,8 +79,6 @@ public class HistoryController {
     //
     // 201 Created, no body.
 
-    // HistoryController.java
-
     @PostMapping("/scan")
     public ResponseEntity<Void> recordScan(
             @Valid @RequestBody RecordScanRequest request
@@ -87,6 +89,14 @@ public class HistoryController {
         } catch (IllegalArgumentException ex) {
             log.warn("HistoryController.recordScan invalid userId='{}'", request.userId());
             return ResponseEntity.badRequest().build();
+        }
+
+        // 👇 NEW: make sure an app_user exists for this UUID so FK on scan_history.user_id passes
+        try {
+            appUserService.ensureUserExistsById(userId, null, null);
+        } catch (Exception ex) {
+            log.error("HistoryController.recordScan: failed to ensure app_user for id={}", userId, ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
 
         var now = OffsetDateTime.now();

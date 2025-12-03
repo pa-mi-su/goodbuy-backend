@@ -1,7 +1,10 @@
 package app.goodbuy.adapters.core.products.model;
 
 import jakarta.persistence.*;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 @Entity
@@ -47,11 +50,31 @@ public class ProductEntity {
     @Column(name = "primary_image_s3_url")
     private String primaryImageS3Url;
 
+    /**
+     * Overall GoodBuy safety score for this product.
+     *
+     * Same 0–99 scale as ingredients.safety_score (NUMERIC(4,2)).
+     * Null means "not yet scored".
+     */
+    @Column(name = "safety_score")
+    private BigDecimal safetyScore;
+
+    /**
+     * Overall rating letter for this product (A–F).
+     *
+     * Null means "not yet scored".
+     */
+    @Column(name = "rating_letter", length = 4)
+    private String ratingLetter;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
     @Column(name = "updated_at", insertable = false, updatable = false)
     private OffsetDateTime updatedAt;
+
+    @OneToMany(mappedBy = "product", fetch = FetchType.LAZY)
+    private List<ProductIngredientEntity> productIngredients = new ArrayList<>();
 
     // ───────── getters & setters ─────────
 
@@ -97,7 +120,21 @@ public class ProductEntity {
     public String getPrimaryImageS3Url() { return primaryImageS3Url; }
     public void setPrimaryImageS3Url(String primaryImageS3Url) { this.primaryImageS3Url = primaryImageS3Url; }
 
+    public BigDecimal getSafetyScore() { return safetyScore; }
+    public void setSafetyScore(BigDecimal safetyScore) { this.safetyScore = safetyScore; }
+
+    public String getRatingLetter() { return ratingLetter; }
+    public void setRatingLetter(String ratingLetter) { this.ratingLetter = ratingLetter; }
+
     public OffsetDateTime getCreatedAt() { return createdAt; }
 
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
+
+    public List<ProductIngredientEntity> getProductIngredients() {
+        return productIngredients;
+    }
+
+    public void setProductIngredients(List<ProductIngredientEntity> productIngredients) {
+        this.productIngredients = productIngredients;
+    }
 }
