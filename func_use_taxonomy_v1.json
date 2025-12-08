@@ -1,0 +1,327 @@
+{
+  "version": "1.0.0",
+  "name": "GoodBuy func_use taxonomy",
+  "func_use": [
+    {
+      "key": "surfactant_nonionic",
+      "label": "Nonionic surfactant",
+      "group": "Surfactants",
+      "description": "Mild surfactants without charge, often used in household cleaners."
+    },
+    {
+      "key": "surfactant_anionic",
+      "label": "Anionic surfactant",
+      "group": "Surfactants",
+      "description": "Negatively charged surfactants, strong cleaners and foamers."
+    },
+    {
+      "key": "surfactant_cationic",
+      "label": "Cationic surfactant",
+      "group": "Surfactants",
+      "description": "Positively charged surfactants, often used in disinfectants and fabric softeners."
+    },
+    {
+      "key": "surfactant_amphoteric",
+      "label": "Amphoteric surfactant",
+      "group": "Surfactants",
+      "description": "Surfactants that can carry positive or negative charge depending on pH."
+    },
+    {
+      "key": "surfactant_general",
+      "label": "Surfactant (unspecified type)",
+      "group": "Surfactants",
+      "description": "Surfactant use where the ionic type is not clearly specified."
+    },
+
+    {
+      "key": "solvent_water",
+      "label": "Water solvent",
+      "group": "Solvents",
+      "description": "Water used as the primary carrier/solvent in the formulation."
+    },
+    {
+      "key": "solvent_alcohol",
+      "label": "Alcohol solvent",
+      "group": "Solvents",
+      "description": "Short-chain alcohols like ethanol or isopropanol used for solvency and evaporation."
+    },
+    {
+      "key": "solvent_glycol",
+      "label": "Glycol solvent",
+      "group": "Solvents",
+      "description": "Glycols or glycol ethers used as powerful co-solvents."
+    },
+    {
+      "key": "solvent_citrus",
+      "label": "Citrus solvent",
+      "group": "Solvents",
+      "description": "Citrus-derived solvents such as d-limonene."
+    },
+    {
+      "key": "solvent_other",
+      "label": "Other solvent",
+      "group": "Solvents",
+      "description": "Solvents that do not fit the other more specific categories."
+    },
+
+    {
+      "key": "preservative_general",
+      "label": "Preservative",
+      "group": "Preservatives",
+      "description": "General preservation against microbial growth."
+    },
+    {
+      "key": "preservative_isothiazolinone",
+      "label": "Isothiazolinone preservative",
+      "group": "Preservatives",
+      "description": "Isothiazolinone-type preservatives (e.g. MIT, CMIT)."
+    },
+    {
+      "key": "preservative_formaldehyde_releaser",
+      "label": "Formaldehyde-releasing preservative",
+      "group": "Preservatives",
+      "description": "Preservatives that slowly release formaldehyde."
+    },
+    {
+      "key": "preservative_organic_acid",
+      "label": "Organic acid preservative",
+      "group": "Preservatives",
+      "description": "Preservatives based on benzoic, sorbic, or other organic acids and their salts."
+    },
+    {
+      "key": "preservative_paraben",
+      "label": "Paraben preservative",
+      "group": "Preservatives",
+      "description": "Paraben-type preservatives."
+    },
+
+    {
+      "key": "chelating_agent",
+      "label": "Chelating agent",
+      "group": "Chelating / Sequestrants",
+      "description": "Binds metal ions to improve cleaning performance and stability."
+    },
+    {
+      "key": "sequestrant",
+      "label": "Sequestrant",
+      "group": "Chelating / Sequestrants",
+      "description": "General metal-ion sequestrant."
+    },
+
+    {
+      "key": "buffering_agent",
+      "label": "Buffering agent",
+      "group": "pH Control",
+      "description": "Maintains pH within a desired range (e.g., citrate salts)."
+    },
+    {
+      "key": "ph_adjuster_acid",
+      "label": "Acidic pH adjuster",
+      "group": "pH Control",
+      "description": "Lowers pH (e.g., citric acid)."
+    },
+    {
+      "key": "ph_adjuster_base",
+      "label": "Basic pH adjuster",
+      "group": "pH Control",
+      "description": "Raises pH (e.g., sodium hydroxide, sodium carbonate)."
+    },
+    {
+      "key": "neutralizing_agent",
+      "label": "Neutralizing agent",
+      "group": "pH Control",
+      "description": "Neutralizes acids or bases to reach a target pH."
+    },
+
+    {
+      "key": "fragrance",
+      "label": "Fragrance",
+      "group": "Fragrance & Odor",
+      "description": "Fragrance or perfume blend for scent."
+    },
+    {
+      "key": "fragrance_allergen",
+      "label": "Fragrance allergen",
+      "group": "Fragrance & Odor",
+      "description": "Individual fragrance component known to be an allergen."
+    },
+    {
+      "key": "odor_masking_agent",
+      "label": "Odor masking agent",
+      "group": "Fragrance & Odor",
+      "description": "Ingredient primarily used to mask or neutralize odors."
+    },
+
+    {
+      "key": "colorant",
+      "label": "Colorant",
+      "group": "Colorants",
+      "description": "Dyes or pigments added mainly for color."
+    },
+    {
+      "key": "optical_brightener",
+      "label": "Optical brightener",
+      "group": "Colorants",
+      "description": "Makes surfaces or fabrics appear whiter/brighter under UV light."
+    },
+
+    {
+      "key": "thickener",
+      "label": "Thickener",
+      "group": "Performance Additives",
+      "description": "Increases viscosity or creates gel-like textures."
+    },
+    {
+      "key": "viscosity_modifier",
+      "label": "Viscosity modifier",
+      "group": "Performance Additives",
+      "description": "Adjusts flow characteristics without necessarily thickening strongly."
+    },
+    {
+      "key": "anti_static_agent",
+      "label": "Anti-static agent",
+      "group": "Performance Additives",
+      "description": "Reduces static buildup on surfaces or fabrics."
+    },
+    {
+      "key": "anti_foaming_agent",
+      "label": "Anti-foaming agent",
+      "group": "Performance Additives",
+      "description": "Reduces or controls foam formation."
+    },
+    {
+      "key": "foaming_agent",
+      "label": "Foaming agent",
+      "group": "Performance Additives",
+      "description": "Increases or stabilizes foam."
+    },
+    {
+      "key": "corrosion_inhibitor",
+      "label": "Corrosion inhibitor",
+      "group": "Performance Additives",
+      "description": "Protects metal surfaces and equipment against corrosion."
+    },
+    {
+      "key": "stabilizer",
+      "label": "Stabilizer",
+      "group": "Performance Additives",
+      "description": "Improves product stability (e.g., against heat, light, or storage conditions)."
+    },
+    {
+      "key": "emulsifier",
+      "label": "Emulsifier",
+      "group": "Performance Additives",
+      "description": "Helps mix oil and water phases into stable formulations."
+    },
+    {
+      "key": "dispersing_agent",
+      "label": "Dispersing agent",
+      "group": "Performance Additives",
+      "description": "Keeps particles evenly dispersed in the product."
+    },
+    {
+      "key": "plasticizer",
+      "label": "Plasticizer",
+      "group": "Performance Additives",
+      "description": "Improves flexibility or feel of films and residues."
+    },
+    {
+      "key": "conditioning_agent",
+      "label": "Conditioning agent",
+      "group": "Performance Additives",
+      "description": "Improves feel or surface properties (e.g., softness, gloss)."
+    },
+    {
+      "key": "antimicrobial_agent",
+      "label": "Antimicrobial agent",
+      "group": "Performance Additives",
+      "description": "Provides antimicrobial effect without being a registered disinfectant."
+    },
+    {
+      "key": "disinfectant",
+      "label": "Disinfectant active",
+      "group": "Performance Additives",
+      "description": "EPA-registered disinfectant active intended to kill pathogens."
+    },
+    {
+      "key": "bleaching_agent",
+      "label": "Bleaching agent",
+      "group": "Performance Additives",
+      "description": "Whitens or removes stains via oxidation or other mechanisms."
+    },
+    {
+      "key": "oxidizing_agent",
+      "label": "Oxidizing agent",
+      "group": "Performance Additives",
+      "description": "Provides oxidative action in cleaning or bleaching."
+    },
+    {
+      "key": "reducing_agent",
+      "label": "Reducing agent",
+      "group": "Performance Additives",
+      "description": "Provides reductive chemistry in cleaning or stain removal."
+    },
+    {
+      "key": "enzyme_amylase",
+      "label": "Enzyme – amylase",
+      "group": "Enzymes",
+      "description": "Breaks down starch-based soils."
+    },
+    {
+      "key": "enzyme_lipase",
+      "label": "Enzyme – lipase",
+      "group": "Enzymes",
+      "description": "Breaks down fat- and oil-based soils."
+    },
+    {
+      "key": "enzyme_protease",
+      "label": "Enzyme – protease",
+      "group": "Enzymes",
+      "description": "Breaks down protein-based soils."
+    },
+    {
+      "key": "enzyme_cellulase",
+      "label": "Enzyme – cellulase",
+      "group": "Enzymes",
+      "description": "Acts on cellulose, used e.g. in laundry to maintain fabric appearance."
+    },
+    {
+      "key": "enzyme_other",
+      "label": "Enzyme – other",
+      "group": "Enzymes",
+      "description": "Other enzyme activity not covered by the more specific enzyme types."
+    },
+
+    {
+      "key": "botanical_extract",
+      "label": "Botanical extract",
+      "group": "Natural/Botanical",
+      "description": "Plant-derived extract used for function or marketing."
+    },
+    {
+      "key": "essential_oil",
+      "label": "Essential oil",
+      "group": "Natural/Botanical",
+      "description": "Concentrated volatile plant oil used for scent or solvency."
+    },
+    {
+      "key": "plant_based_solvent",
+      "label": "Plant-based solvent",
+      "group": "Natural/Botanical",
+      "description": "Solvent primarily derived from plant sources."
+    },
+
+    {
+      "key": "unknown",
+      "label": "Unknown function",
+      "group": "Uncategorized",
+      "description": "Function could not be confidently classified."
+    },
+    {
+      "key": "unverified",
+      "label": "Unverified function",
+      "group": "Uncategorized",
+      "description": "Function suspected but not yet fully verified or researched."
+    }
+  ]
+}

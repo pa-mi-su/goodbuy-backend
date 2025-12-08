@@ -1,0 +1,43 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>app.goodbuy</groupId>
+        <artifactId>goodbuy-backend</artifactId>
+        <version>0.1.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>goodbuy-adapters-core</artifactId>
+    <packaging>jar</packaging>
+
+    <dependencies>
+        <!-- Domain contracts / DTOs -->
+        <dependency>
+            <groupId>app.goodbuy</groupId>
+            <artifactId>goodbuy-core</artifactId>
+        </dependency>
+
+        <!-- Spring + JPA (tune as needed) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- JSON serialization for cached ProductDetailDto -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- AWS S3 client for uploading product & missing-product photos -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>2.25.17</version>
+        </dependency>
+    </dependencies>
+</project>
