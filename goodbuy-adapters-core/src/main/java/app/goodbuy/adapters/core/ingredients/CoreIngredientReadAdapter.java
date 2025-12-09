@@ -1,5 +1,6 @@
 package app.goodbuy.adapters.core.ingredients;
 
+import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import app.goodbuy.core.ingredients.port.IngredientReadPort;
 import org.springframework.stereotype.Component;

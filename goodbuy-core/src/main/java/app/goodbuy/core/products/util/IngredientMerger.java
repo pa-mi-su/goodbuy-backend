@@ -1,50 +1,71 @@
 package app.goodbuy.core.products.util;
 
-import app.goodbuy.core.products.dto.ProductDetailDto;
-import java.util.*;
-import java.util.stream.Collectors;
+import app.goodbuy.core.products.dto.ProductDetailDto.IngredientDto;
 
+import java.util.*;
+
+/**
+ * Merge GoodBuy-DB ingredients + external ingredients.
+ *
+ * Rules:
+ *  1. If DB has an ingredient → it wins (external never overwrites our curated data)
+ *  2. If external has an ingredient DB does NOT → include it as “external only”
+ *  3. Preserve ingredient order from the external list
+ */
 public final class IngredientMerger {
 
-    private IngredientMerger() {}
+    private IngredientMerger() {
+        // utility
+    }
 
-    /**
-     * Merge GoodBuy-DB ingredients + external ingredients.
-     * Rules:
-     * 1. If DB has an ingredient → it wins (external never overwrites our curated canonical/rating data)
-     * 2. If external has an ingredient DB does NOT → include it as “external only”
-     * 3. Preserve ingredient order from the external list
-     */
-    public static List<ProductDetailDto.IngredientDto> merge(
-            List<ProductDetailDto.IngredientDto> dbIngredients,
-            List<ProductDetailDto.IngredientDto> externalIngredients
+    public static List<IngredientDto> merge(
+            List<IngredientDto> dbIngredients,
+            List<IngredientDto> externalIngredients
     ) {
+        // No external → just return DB (or empty)
         if (externalIngredients == null || externalIngredients.isEmpty()) {
             return dbIngredients != null ? dbIngredients : List.of();
         }
 
-        if (dbIngredients == null) {
+        // No DB → just return external
+        if (dbIngredients == null || dbIngredients.isEmpty()) {
             return externalIngredients;
         }
 
-        // Map DB ingredients by canonical key
-        Map<String, ProductDetailDto.IngredientDto> dbMap =
-                dbIngredients.stream()
-                        .collect(Collectors.toMap(
-                                i -> normalizeKey(i.canonical()),
-                                i -> i
-                        ));
+        // Build a lookup map from DB ingredients using a normalized canonical key.
+        // If there are duplicates, the FIRST one wins.
+        Map<String, IngredientDto> dbByCanonical = new LinkedHashMap<>();
+        for (IngredientDto dbIng : dbIngredients) {
+            String key = normalizeKey(dbIng.canonical());
+            if (key.isEmpty()) {
+                // If canonical is missing, you could optionally use id or original as a fallback:
+                key = normalizeKey(dbIng.id());
+                if (key.isEmpty()) {
+                    key = normalizeKey(dbIng.original());
+                }
+            }
+            if (!key.isEmpty() && !dbByCanonical.containsKey(key)) {
+                dbByCanonical.put(key, dbIng);
+            }
+        }
 
-        List<ProductDetailDto.IngredientDto> merged = new ArrayList<>();
+        List<IngredientDto> merged = new ArrayList<>(externalIngredients.size());
 
-        for (ProductDetailDto.IngredientDto ext : externalIngredients) {
+        // Walk external list in order; if DB has a matching canonical → DB wins.
+        for (IngredientDto ext : externalIngredients) {
             String key = normalizeKey(ext.canonical());
+            if (key.isEmpty()) {
+                key = normalizeKey(ext.id());
+                if (key.isEmpty()) {
+                    key = normalizeKey(ext.original());
+                }
+            }
 
-            if (dbMap.containsKey(key)) {
+            if (!key.isEmpty() && dbByCanonical.containsKey(key)) {
                 // Use DB-curated ingredient
-                merged.add(dbMap.get(key));
+                merged.add(dbByCanonical.get(key));
             } else {
-                // Use external ingredient
+                // Use external ingredient as-is
                 merged.add(ext);
             }
         }
@@ -54,6 +75,6 @@ public final class IngredientMerger {
 
     private static String normalizeKey(String s) {
         if (s == null) return "";
-        return s.trim().toLowerCase();
+        return s.trim().toLowerCase(Locale.ROOT);
     }
 }

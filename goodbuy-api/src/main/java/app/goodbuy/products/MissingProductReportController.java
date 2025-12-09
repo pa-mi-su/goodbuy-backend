@@ -1,6 +1,5 @@
 package app.goodbuy.products;
 
-import app.goodbuy.adapters.core.products.model.MissingProductReportEntity;
 import app.goodbuy.adapters.core.products.service.MissingProductReportService;
 import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
@@ -14,7 +13,8 @@ import org.springframework.web.bind.annotation.*;
  * iOS flow:
  *  - User scans a product that we don't have.
  *  - App POSTs here with EAN + basic context (name, brand, images, etc.).
- *  - We persist the report AND send a Slack notification.
+ *  - We persist the report AND (on first report only) send a Slack notification.
+ *  - Response tells the app whether this was already reported before.
  */
 @RestController
 @RequestMapping("/api/v1/products/missing")
@@ -34,24 +34,29 @@ public class MissingProductReportController {
     public MissingProductReportResponse reportMissing(
             @RequestBody MissingProductReportRequest req
     ) {
-        MissingProductReportEntity saved = service.report(
-                req.productEan(),
-                req.productName(),
-                req.brandName(),
-                req.frontImageUrl(),
-                req.backImageUrl(),
-                req.appVersion(),
-                req.platform(),
-                req.notes()
-        );
+        // Use the new API that returns (entity + isNew flag)
+        MissingProductReportService.MissingProductReportResult result =
+                service.reportWithStatus(
+                        req.productEan(),
+                        req.productName(),
+                        req.brandName(),
+                        req.frontImageUrl(),
+                        req.backImageUrl(),
+                        req.appVersion(),
+                        req.platform(),
+                        req.notes()
+                );
+
+        var saved = result.entity();
+        boolean alreadyReported = !result.isNew();
 
         log.info(
-                "Missing product reported ean='{}' name='{}' brand='{}' platform={} version={}",
+                "Missing product reported ean='{}' name='{}' brand='{}' platform={} version={} alreadyReported={}",
                 req.productEan(), req.productName(), req.brandName(),
-                req.platform(), req.appVersion()
+                req.platform(), req.appVersion(), alreadyReported
         );
 
-        return new MissingProductReportResponse(saved.getId());
+        return new MissingProductReportResponse(saved.getId(), alreadyReported);
     }
 
     // ─────────────────────────────────────────────
@@ -69,5 +74,13 @@ public class MissingProductReportController {
             String notes
     ) {}
 
-    public record MissingProductReportResponse(Long id) {}
+    /**
+     * `alreadyReported == true` means:
+     *  - There was already a row for this EAN in product_missing_report
+     *  - We updated it, but did NOT send Slack again
+     */
+    public record MissingProductReportResponse(
+            Long id,
+            boolean alreadyReported
+    ) {}
 }

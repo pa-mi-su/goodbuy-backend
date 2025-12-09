@@ -1,4 +1,4 @@
-package app.goodbuy.adapters.core.ingredients;
+package app.goodbuy.adapters.core.ingredients.repository;
 
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import org.springframework.data.jpa.repository.EntityGraph;
