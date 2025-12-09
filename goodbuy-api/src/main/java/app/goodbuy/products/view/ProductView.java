@@ -21,6 +21,12 @@ import java.util.Optional;
  *        primary source is the product-level score/letter coming from ProductDetailDto
  *        (DB scoring engine). If those are missing, and the category is supported,
  *        we fall back to ingredient-based full-coverage logic.
+ *
+ *  - primaryImageUrl:
+ *        chosen from dto.images() in this order:
+ *           1) First URL that looks like an S3-hosted GoodBuy image
+ *              (contains ".s3.amazonaws.com")
+ *           2) First URL from dto.images() (if any)
  */
 public record ProductView(
         String gtin,
@@ -65,7 +71,8 @@ public record ProductView(
                         .distinct()
                         .toList();
 
-        String primaryImageUrl = imageUrls.isEmpty() ? null : imageUrls.get(0);
+        // Prefer S3-looking URL, else first
+        String primaryImageUrl = resolvePrimaryImageUrl(imageUrls);
 
         // Build ingredient views
         List<ProductIngredientView> ingredientViews;
@@ -204,5 +211,26 @@ public record ProductView(
             return i.id().trim();
         }
         return null;
+    }
+
+    /**
+     * Decide which image URL to expose as primary using only dto.images():
+     *   1) First URL that looks like an S3 GoodBuy image (contains ".s3.amazonaws.com")
+     *   2) First URL from list
+     */
+    private static String resolvePrimaryImageUrl(List<String> imageUrls) {
+        if (imageUrls == null || imageUrls.isEmpty()) {
+            return null;
+        }
+
+        // Prefer any S3-hosted URL
+        for (String url : imageUrls) {
+            if (url != null && url.contains(".s3.amazonaws.com")) {
+                return url;
+            }
+        }
+
+        // Fallback: first URL
+        return imageUrls.get(0);
     }
 }
