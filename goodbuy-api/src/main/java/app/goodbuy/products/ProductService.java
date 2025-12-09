@@ -4,14 +4,12 @@ import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
-import app.goodbuy.core.products.util.IngredientMerger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -35,23 +33,10 @@ public class ProductService {
         this.lookup = lookup.orElse(null);
         this.snapshot = snapshot.orElse(null);
 
-        if (this.external != null) {
-            log.info("catalog client wired: {}", this.external.getClass().getName());
-        } else {
-            log.info("no external catalog client configured; running without external catalog");
-        }
-
-        if (this.lookup != null) {
-            log.info("product lookup wired: {}", this.lookup.getClass().getName());
-        } else {
-            log.info("no GoodBuy product lookup configured; will skip DB enrichment/fallback");
-        }
-
-        if (this.snapshot != null) {
-            log.info("product snapshot wired: {}", this.snapshot.getClass().getName());
-        } else {
-            log.info("no product snapshot configured; external hits will NOT be persisted");
-        }
+        log.info("ProductService wiring: external={}, lookup={}, snapshot={}",
+                this.external != null ? this.external.getClass().getSimpleName() : "<none>",
+                this.lookup   != null ? this.lookup.getClass().getSimpleName()   : "<none>",
+                this.snapshot != null ? this.snapshot.getClass().getSimpleName() : "<none>");
     }
 
     /** Human-friendly provider name for logs & error responses (external side). */
@@ -66,17 +51,16 @@ public class ProductService {
     }
 
     /**
-     * FINAL long-term lookup flow:
+     * New lookup flow (DB-first):
      *
      * 1) Normalize GTIN.
-     * 2) Call external catalog FIRST (EAN-DB) → authoritative ingredient list.
-     * 3) If external hit:
-     *      - snapshot into GoodBuy DB (products + product_ingredients).
-     *      - re-read from GoodBuy DB and merge ingredients:
-     *          • DB ingredient rows (with ratings) override external ones
-     *          • External fills gaps where we have no DB ingredient yet
-     *      - prefer DB images (S3) if present.
-     * 4) If external miss/error → fallback to GoodBuy DB snapshot only.
+     * 2) Try GoodBuy DB snapshot FIRST (products + product_ingredients + ingredients).
+     *    - If found, return it immediately.
+     * 3) If DB misses:
+     *    - Call external catalog (EAN-DB) to fetch full label + images.
+     *    - Snapshot into GoodBuy DB (products + product_ingredients, and product scores).
+     *    - Re-read from GoodBuy DB and return that if present.
+     *    - If still missing, fall back to the external DTO.
      */
     public ProductDetailDto getByGtinOrNull(String gtin14) {
         String code = normalize(gtin14);
@@ -84,110 +68,46 @@ public class ProductService {
             return null;
         }
 
-        // 1) External FIRST (authoritative ingredient list)
-        ProductDetailDto fromExternal = fetchFromExternalOrNull(code);
-        if (fromExternal != null) {
-            // 2) Snapshot into GoodBuy DB (best-effort)
-            trySnapshotSave(fromExternal);
-
-            // 3) Enrich using GoodBuy DB ingredient catalog if possible
-            ProductDetailDto enriched = tryEnrichWithGoodBuy(fromExternal);
-            return enriched;
+        // 1) DB FIRST
+        ProductDetailDto fromDbFirst = tryDbLookup(code);
+        if (fromDbFirst != null) {
+            int count = fromDbFirst.ingredients() == null ? 0 : fromDbFirst.ingredients().size();
+            log.info("ProductService.getByGtinOrNull: using DB snapshot with {} ingredients for gtin={}",
+                    count, code);
+            return fromDbFirst;
         }
 
-        // 4) Fallback: GoodBuy DB snapshot only (if external is down / missing)
-        return tryDbLookup(code);
+        // 2) External (EAN-DB) if DB has nothing
+        ProductDetailDto fromExternal = fetchFromExternalOrNull(code);
+        if (fromExternal == null) {
+            // No external, no DB → nothing
+            return null;
+        }
+
+        // 3) Snapshot external into GoodBuy DB
+        trySnapshotSave(fromExternal);
+
+        // 4) Re-read from DB (now with product_ingredients links & scores)
+        ProductDetailDto fromDbAfterSave = tryDbLookup(code);
+        if (fromDbAfterSave != null) {
+            int count = fromDbAfterSave.ingredients() == null ? 0 : fromDbAfterSave.ingredients().size();
+            log.info("ProductService.getByGtinOrNull: after snapshot, DB has {} ingredients for gtin={}",
+                    count, code);
+            return fromDbAfterSave;
+        }
+
+        // 5) Last resort: return external DTO
+        log.warn("ProductService.getByGtinOrNull: snapshot saved but DB still empty for gtin={}, returning external DTO",
+                code);
+        return fromExternal;
     }
 
-    /** Rich detail lookup: same flow as simple lookup. */
+    /** Detail = same behavior as simple lookup for now. */
     public ProductDetailDto getDetailByGtinOrNull(String gtin14) {
         return getByGtinOrNull(gtin14);
     }
 
     // ── internal helpers ───────────────────────────────────────────────────────
-
-    /**
-     * Re-read snapshot from GoodBuy DB and merge its ingredients/images
-     * into the external DTO.
-     */
-    private ProductDetailDto tryEnrichWithGoodBuy(ProductDetailDto externalDto) {
-        if (externalDto == null || lookup == null) {
-            return externalDto;
-        }
-        String gtin = externalDto.gtin();
-        if (gtin == null || gtin.isBlank()) return externalDto;
-
-        try {
-            Optional<ProductDetailDto> optDb = lookup.findByGtin(gtin);
-            if (optDb.isEmpty()) {
-                log.debug("ingredient enrichment: no GoodBuy DB snapshot yet for gtin14={}", gtin);
-                return externalDto;
-            }
-
-            ProductDetailDto dbDto = optDb.get();
-
-            List<ProductDetailDto.IngredientDto> dbIngredients = dbDto.ingredients();
-            List<ProductDetailDto.IngredientDto> externalIngredients = externalDto.ingredients();
-
-            if (externalIngredients == null || externalIngredients.isEmpty()) {
-                // Nothing to merge; DB may still have curated ingredients if you populated them manually.
-                if (dbIngredients != null && !dbIngredients.isEmpty()) {
-                    log.info("ingredient enrichment: external had 0 ingredients, using DB-only for gtin14={}", gtin);
-                    return dbDto;
-                }
-                return externalDto;
-            }
-
-            if (dbIngredients == null || dbIngredients.isEmpty()) {
-                // We don’t know any GoodBuy ingredients yet → just return external.
-                log.debug("ingredient enrichment: DB has 0 ingredients; keeping external only for gtin14={}", gtin);
-                return externalDto;
-            }
-
-            // Merge: GoodBuy ingredients override external ones by canonical key
-            List<ProductDetailDto.IngredientDto> mergedIngredients =
-                    IngredientMerger.merge(dbIngredients, externalIngredients);
-
-            // Prefer DB images (will be S3 URLs) if present; otherwise keep external images
-            List<ProductDetailDto.ImageDto> images =
-                    (dbDto.images() != null && !dbDto.images().isEmpty())
-                            ? dbDto.images()
-                            : externalDto.images();
-
-            // NEW: carry domain through, preferring DB domain when present
-            String domain = (dbDto.domain() != null && !dbDto.domain().isBlank())
-                    ? dbDto.domain()
-                    : externalDto.domain();
-
-            ProductDetailDto mergedDto = new ProductDetailDto(
-                    // Product identity/label: keep external as the source of truth for text
-                    externalDto.gtin(),
-                    externalDto.name(),
-                    externalDto.brand(),
-                    externalDto.category(),
-                    externalDto.description(),
-                    images,
-                    mergedIngredients,
-                    externalDto.titles(),
-                    externalDto.manufacturer(),
-                    "GOODBUY-DB+EAN-DB",
-                    domain
-            );
-
-            log.info("ingredient enrichment: applied GoodBuy overrides for gtin14={} (dbIngs={} externalIngs={} merged={})",
-                    gtin,
-                    dbIngredients.size(),
-                    externalIngredients.size(),
-                    mergedIngredients.size());
-
-            return mergedDto;
-        } catch (Exception e) {
-            log.warn("ingredient enrichment failed gtin14={} type={} msg={}",
-                    externalDto.gtin(), e.getClass().getSimpleName(), e.getMessage());
-            // Fall back to raw external DTO if enrichment fails
-            return externalDto;
-        }
-    }
 
     private ProductDetailDto tryDbLookup(String code) {
         if (lookup == null) {
@@ -197,8 +117,9 @@ public class ProductService {
             Optional<ProductDetailDto> opt = lookup.findByGtin(code);
             if (opt.isPresent()) {
                 ProductDetailDto dto = opt.get();
-                log.info("goodbuy-db hit gtin14={} name={} brand={}",
-                        code, safe(dto.name()), safe(dto.brand()));
+                int ingCount = dto.ingredients() == null ? 0 : dto.ingredients().size();
+                log.info("goodbuy-db hit gtin14={} name={} brand={} ingredientsCount={}",
+                        code, safe(dto.name()), safe(dto.brand()), ingCount);
                 return dto;
             }
             log.debug("goodbuy-db miss gtin14={}", code);
@@ -221,6 +142,8 @@ public class ProductService {
 
         try {
             snapshot.saveSnapshot(dto);
+            log.info("goodbuy-db snapshot saved gtin14={} name={} brand={}",
+                    gtin, safe(dto.name()), safe(dto.brand()));
         } catch (Exception e) {
             // Non-fatal: the user still gets the external product; we just failed to persist it.
             log.warn("goodbuy-db error on snapshot gtin14={} msg={}", gtin, e.getMessage());
