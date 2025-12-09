@@ -1,8 +1,8 @@
 package app.goodbuy.ingredients;
 
 import app.goodbuy.adapters.core.ingredients.IngredientMapper;
-import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
+import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import org.springframework.stereotype.Service;
 
@@ -26,9 +26,8 @@ public class IngredientReadService {
      *
      * Priority:
      *  1) exact canonical_key match (case-insensitive)
-     *  2) exact display_name match (via loose search + rank)
-     *  3) exact alias match (via repo.findByAliasExact)
-     *  4) loose fallback (substring match across canonical/display/aliases)
+     *  2) exact alias match (case-insensitive)
+     *  3) loose fallback (substring match across canonical/display/aliases)
      */
     public Optional<IngredientDTO> searchRanked(String needle) {
         String q = normalizeNeedle(needle);
@@ -70,8 +69,6 @@ public class IngredientReadService {
 
     /**
      * Ranked batch search.
-     *
-     * For each Ingredient, we compute the best rank across the provided needles.
      */
     public List<IngredientDTO> searchManyRanked(List<String> needles) {
         if (needles == null || needles.isEmpty()) {
@@ -100,18 +97,10 @@ public class IngredientReadService {
                 .toList();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
     // Ranking helpers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────
 
-    /**
-     * Rank for a single query string `q` against one Ingredient.
-     *
-     *  0 = exact canonical_key match
-     *  1 = exact display_name match
-     *  2 = exact alias match
-     *  99 = fallback / loose hit
-     */
     private int rank(Ingredient i, String q) {
         String ck = safe(i.getCanonicalKey());
         String dn = safe(i.getDisplayName());
@@ -126,12 +115,9 @@ public class IngredientReadService {
         if (dn.equals(q)) return 1;
         if (aliases.contains(q)) return 2;
 
-        return 99; // fallback for loose matches
+        return 99;
     }
 
-    /**
-     * For batch lookup, we take the best (lowest) rank for any query string.
-     */
     private int bestRank(Ingredient i, List<String> qs) {
         return qs.stream()
                 .mapToInt(q -> rank(i, q))
@@ -148,9 +134,7 @@ public class IngredientReadService {
         return raw.toLowerCase().trim();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // Backwards-compatible API used by IngredientController
-    // ─────────────────────────────────────────────────────────────────────────
 
     public Optional<IngredientDTO> findByNameOrAlias(String q) {
         return searchRanked(q);
