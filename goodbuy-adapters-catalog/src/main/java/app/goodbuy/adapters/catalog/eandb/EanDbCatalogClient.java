@@ -180,7 +180,8 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
                     ingredients,
                     titles,
                     manufacturer,
-                    "EAN-DB"
+                    "EAN-DB",
+                    "unknown"   // domain: will be classified later in our own pipeline
             );
 
             log.debug(
@@ -188,8 +189,8 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
                     gtin14,
                     safe(out.name()),
                     safe(out.brand()),
-                    out.images().size(),
-                    out.ingredients().size()
+                    out.images() == null ? 0 : out.images().size(),
+                    out.ingredients() == null ? 0 : out.ingredients().size()
             );
 
             return Optional.of(out);

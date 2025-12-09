@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.Locale;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -82,6 +83,59 @@ public class AppUserService {
         return saved;
     }
 
+    /**
+     * Ensure a user exists with the given UUID id.
+     *
+     * Used when the mobile app only knows a UUID userId (no email yet),
+     * e.g. for scan history.
+     *
+     * Rules:
+     *  - If user exists → update last_seen_at (+ platform/appVersion if provided).
+     *  - If not → create a new app_user with:
+     *        id = userId
+     *        email = synthetic placeholder (non-null, unique-ish)
+     */
+    public AppUserEntity ensureUserExistsById(UUID userId, String platform, String appVersion) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+
+        return repo.findById(userId)
+                .map(existing -> {
+                    existing.setLastSeenAt(now);
+                    if (platform != null) {
+                        existing.setPlatform(platform);
+                    }
+                    if (appVersion != null) {
+                        existing.setAppVersion(appVersion);
+                    }
+                    log.debug("AppUserService.ensureUserExistsById: touched existing user id={}", existing.getId());
+                    // Entity is managed; will be flushed at tx commit
+                    return existing;
+                })
+                .orElseGet(() -> {
+                    String syntheticEmail = buildSyntheticEmail(userId);
+                    log.info("AppUserService.ensureUserExistsById: creating new app_user id={} email='{}' (synthetic)",
+                            userId, syntheticEmail);
+
+                    AppUserEntity u = new AppUserEntity();
+                    // IMPORTANT: we bind this exact UUID so FK from scan_history matches
+                    u.setId(userId);
+                    u.setEmail(syntheticEmail);
+                    u.setCreatedAt(now);
+                    u.setLastSeenAt(now);
+                    u.setPlatform(platform);
+                    u.setAppVersion(appVersion);
+
+                    AppUserEntity saved = repo.save(u);
+                    log.debug("AppUserService.ensureUserExistsById: saved new user id={} email='{}'",
+                            saved.getId(), saved.getEmail());
+                    return saved;
+                });
+    }
+
     // ─────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────
@@ -94,5 +148,18 @@ public class AppUserService {
 
     private boolean isValidEmail(String email) {
         return EMAIL_PATTERN.matcher(email).matches();
+    }
+
+    /**
+     * Build a synthetic but valid email for UUID-based users.
+     *
+     * Must:
+     *  - be non-null
+     *  - match EMAIL_PATTERN
+     *  - be unique-ish per UUID
+     */
+    private String buildSyntheticEmail(UUID userId) {
+        // Example: uid-7ca5...@anon.goodbuy.app
+        return "uid-" + userId.toString() + "@anon.goodbuy.app";
     }
 }

@@ -154,6 +154,11 @@ public class ProductService {
                             ? dbDto.images()
                             : externalDto.images();
 
+            // NEW: carry domain through, preferring DB domain when present
+            String domain = (dbDto.domain() != null && !dbDto.domain().isBlank())
+                    ? dbDto.domain()
+                    : externalDto.domain();
+
             ProductDetailDto mergedDto = new ProductDetailDto(
                     // Product identity/label: keep external as the source of truth for text
                     externalDto.gtin(),
@@ -165,7 +170,8 @@ public class ProductService {
                     mergedIngredients,
                     externalDto.titles(),
                     externalDto.manufacturer(),
-                    "GOODBUY-DB+EAN-DB"
+                    "GOODBUY-DB+EAN-DB",
+                    domain
             );
 
             log.info("ingredient enrichment: applied GoodBuy overrides for gtin14={} (dbIngs={} externalIngs={} merged={})",

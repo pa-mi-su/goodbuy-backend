@@ -6,26 +6,18 @@ import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 
 @Entity
-@Table(
-        name = "product_ingredients",
-        uniqueConstraints = {
-                @UniqueConstraint(
-                        name = "uq_prod_ing_pair",
-                        columnNames = {"product_id", "ingredient_id"}
-                )
-        }
-)
+@Table(name = "product_ingredients")
 public class ProductIngredientEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(optional = false, fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "product_id", nullable = false)
     private ProductEntity product;
 
-    @ManyToOne(optional = false, fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "ingredient_id", nullable = false)
     private Ingredient ingredient;
 
@@ -35,7 +27,7 @@ public class ProductIngredientEntity {
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    // getters & setters
+    // ───────── getters & setters ─────────
 
     public Long getId() {
         return id;
