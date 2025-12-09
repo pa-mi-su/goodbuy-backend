@@ -18,8 +18,9 @@ import java.util.Optional;
  *        false → we do NOT rate; client should show "not rated yet" UX
  *
  *  - safetyScore / ratingLetter at PRODUCT level:
- *        derived from ingredients, but ONLY when we have full coverage.
- *        If even one ingredient is missing/unrated → product is "NR".
+ *        primary source is the product-level score/letter coming from ProductDetailDto
+ *        (DB scoring engine). If those are missing, and the category is supported,
+ *        we fall back to ingredient-based full-coverage logic.
  */
 public record ProductView(
         String gtin,
@@ -34,7 +35,7 @@ public record ProductView(
         List<String> claims,
         List<String> hazards,
         String source,
-        BigDecimal safetyScore,   // product-level score (null if NR)
+        BigDecimal safetyScore,   // product-level score (null if NR / unsupported)
         String ratingLetter       // product-level letter: A–F or "NR"
 ) {
 
@@ -134,11 +135,14 @@ public record ProductView(
                     .toList();
         }
 
-        // ── Product-level scoring with FULL COVERAGE requirement ──────────
-        BigDecimal productScore = null;
-        String productRating = null;
+        // ── Product-level scoring ─────────────────────────────────────────────
+        // 1) Prefer product-level score/letter coming from ProductDetailDto
+        BigDecimal productScore = dto.safetyScore();
+        String productRating    = dto.ratingLetter();
 
-        if (categorySupported) {
+        // 2) Only if DTO has no product-level rating do we fall back to
+        //    ingredient-based full-coverage logic (and only for supported domains).
+        if (productScore == null && (productRating == null || productRating.isBlank()) && categorySupported) {
             long totalIngredients = ingredientViews.size();
             long ratedIngredients = ingredientViews.stream()
                     .filter(ProductIngredientView::inCatalog)
@@ -158,6 +162,9 @@ public record ProductView(
                         productScore = s;
                         productRating = iv.ratingLetter();
                     }
+                }
+                if (productRating == null || productRating.isBlank()) {
+                    productRating = "NR";
                 }
             } else if (totalIngredients > 0) {
                 // We know some ingredients, but NOT all → product is NR.

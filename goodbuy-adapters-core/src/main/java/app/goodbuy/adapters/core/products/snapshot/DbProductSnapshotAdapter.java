@@ -2,6 +2,7 @@ package app.goodbuy.adapters.core.products.snapshot;
 
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
+import app.goodbuy.adapters.core.ingredients.service.MissingIngredientReportService;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.model.ProductIngredientEntity;
 import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
@@ -42,6 +43,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductImageStoragePort imageStorage;
     private final ProductDomainResolverPort domainResolver;
     private final ProductScoringAdapterService productScoringAdapter;
+    private final MissingIngredientReportService missingIngredientReportService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
@@ -54,7 +56,8 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             IngredientRepository ingredientRepo,
             ProductImageStoragePort imageStorage,
             ProductDomainResolverPort domainResolver,
-            ProductScoringAdapterService productScoringAdapter
+            ProductScoringAdapterService productScoringAdapter,
+            MissingIngredientReportService missingIngredientReportService
     ) {
         this.productRepo = productRepo;
         this.productIngredientRepo = productIngredientRepo;
@@ -62,6 +65,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         this.imageStorage = imageStorage;
         this.domainResolver = domainResolver;
         this.productScoringAdapter = productScoringAdapter;
+        this.missingIngredientReportService = missingIngredientReportService;
     }
 
     @Override
@@ -193,7 +197,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 continue;
             }
 
-            Ingredient ingredient = resolveOrCreateIngredient(canonicalKey, displayName);
+            Ingredient ingredient = resolveOrCreateIngredient(canonicalKey, displayName, ean14);
 
             if (ingredient.getId() == null) {
                 log.warn("saveSnapshot: ingredient entity has null id for canonicalKey='{}' — skipping link", canonicalKey);
@@ -231,7 +235,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     // ───────────── Ingredient resolution ─────────────
 
-    private Ingredient resolveOrCreateIngredient(String canonicalKey, String displayName) {
+    private Ingredient resolveOrCreateIngredient(String canonicalKey,
+                                                 String displayName,
+                                                 String productEan) {
         String needle = canonicalKey;
 
         // 1) Exact canonical_key match
@@ -265,6 +271,21 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                     "saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
                     ingredient.getId(), canonicalKey, safe(displayName)
             );
+
+            // 🔔 Auto-report missing ingredient ONCE per (ingredient, product)
+            try {
+                missingIngredientReportService.reportWithStatus(
+                        displayName,                 // ingredient_name
+                        productEan,                  // product_ean
+                        "backend-ingestion",         // app_version (synthetic)
+                        "backend",                   // platform
+                        "Skeleton ingredient auto-created from external catalog (canonicalKey=" + canonicalKey + ")"
+                );
+            } catch (Exception ex) {
+                // Never break ingestion because reporting fails
+                log.warn("Failed to record missing ingredient report for '{}' (ean={}): {}",
+                        displayName, productEan, ex.getMessage(), ex);
+            }
         }
 
         return ingredient;
