@@ -52,7 +52,7 @@ public class S3StorageService implements ProductImageStoragePort {
 
         if (endpoint != null && !endpoint.isBlank()) {
             builder = builder.endpointOverride(URI.create(endpoint));
-            log.info("S3StorageService using custom endpoint={}", endpoint);
+            log.info("S3StorageService using custom endpoint={} region={}", endpoint, region);
         } else {
             log.info("S3StorageService using default AWS endpoint for region={}", region);
         }
@@ -67,16 +67,10 @@ public class S3StorageService implements ProductImageStoragePort {
      */
     @Override
     public String uploadImage(String key, byte[] bytes, String contentType) {
-
         int byteCount = (bytes == null ? 0 : bytes.length);
 
-        log.error("🔊 S3StorageService.uploadImage: START bucket={} region={} key={} bytes={} contentType={}",
+        log.debug("S3StorageService.uploadImage: bucket={} region={} key={} bytes={} contentType={}",
                 bucket, region, key, byteCount, contentType);
-
-        // Log whether we have creds (BUT NOT THE VALUES)
-        log.error("🔊 S3StorageService.creds: accessKey_present={} secretKey_present={}",
-                (s3 != null),  // s3 is built using creds; but log anyway
-                "hidden");      // redact
 
         try {
             PutObjectRequest.Builder reqBuilder = PutObjectRequest.builder()
@@ -89,27 +83,25 @@ public class S3StorageService implements ProductImageStoragePort {
 
             PutObjectRequest req = reqBuilder.build();
 
-            log.error("🔊 S3StorageService: calling s3.putObject bucket={} key={} ...", bucket, key);
-
+            log.debug("S3StorageService.uploadImage: calling s3.putObject bucket={} key={}", bucket, key);
             s3.putObject(req, RequestBody.fromBytes(bytes));
 
-            log.error("🔊 S3StorageService: SUCCESS bucket={} key={}", bucket, key);
+            String url = buildPublicUrl(key);
+            log.info("S3StorageService.uploadImage: success bucket={} key={} bytes={} url={}",
+                    bucket, key, byteCount, url);
 
-        } catch (Exception ex) {
-            log.error("❌ S3StorageService.ERROR bucket={} key={} msg={} stack={}",
-                    bucket, key, ex.getMessage(), ex.toString());
-            throw ex; // Let the caller log too
-        }
-
-        // URL generation logging
-        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
-            String url = publicBaseUrl + "/" + key;
-            log.error("🔊 S3StorageService: FINAL_URL={}", url);
             return url;
+        } catch (Exception ex) {
+            log.error("S3StorageService.uploadImage: failed bucket={} key={}", bucket, key, ex);
+            throw ex; // Let the caller handle/log as well
         }
+    }
 
-        String url = String.format("https://%s.s3.%s.amazonaws.com/%s", bucket, region, key);
-        log.error("🔊 S3StorageService: FINAL_URL(default)={}", url);
-        return url;
+    private String buildPublicUrl(String key) {
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
+            return publicBaseUrl + "/" + key;
+        }
+        // Standard AWS S3 URL pattern
+        return String.format("https://%s.s3.%s.amazonaws.com/%s", bucket, region, key);
     }
 }

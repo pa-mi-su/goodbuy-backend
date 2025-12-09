@@ -36,6 +36,7 @@ public class ProductDetailDtoMapper {
                         : product.getProductIngredients().stream()
                         .filter(Objects::nonNull)
                         .map(this::mapIngredientLink)
+                        .filter(Objects::nonNull)
                         .toList();
 
         // Titles / manufacturer not modeled in DB yet
@@ -48,6 +49,7 @@ public class ProductDetailDtoMapper {
             domain = "unknown";
         }
 
+        // ✅ Pass through stored product-level score + letter from DB
         return new ProductDetailDto(
                 product.getEan(),
                 product.getName(),
@@ -59,7 +61,9 @@ public class ProductDetailDtoMapper {
                 titles,
                 manufacturer,
                 "GOODBUY-DB",
-                domain
+                domain,
+                product.getSafetyScore(),   // <-- 64
+                product.getRatingLetter()   // <-- "D"
         );
     }
 
