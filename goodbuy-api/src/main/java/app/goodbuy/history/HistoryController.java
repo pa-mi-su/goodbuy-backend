@@ -3,7 +3,7 @@ package app.goodbuy.history;
 import app.goodbuy.adapters.core.history.ScanHistoryMapper;
 import app.goodbuy.adapters.core.history.model.ScanHistoryEntity;
 import app.goodbuy.adapters.core.history.repo.ScanHistoryRepository;
-import app.goodbuy.adapters.core.users.service.AppUserService;   // 👈 NEW IMPORT
+import app.goodbuy.adapters.core.users.service.AppUserService;
 import app.goodbuy.core.history.dto.ScanHistoryDTO;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -27,10 +27,10 @@ public class HistoryController {
     private static final Logger log = LoggerFactory.getLogger(HistoryController.class);
 
     private final ScanHistoryRepository historyRepository;
-    private final AppUserService appUserService;   // 👈 NEW FIELD
+    private final AppUserService appUserService;
 
     public HistoryController(ScanHistoryRepository historyRepository,
-                             AppUserService appUserService) {   // 👈 UPDATED CTOR
+                             AppUserService appUserService) {
         this.historyRepository = historyRepository;
         this.appUserService = appUserService;
     }
@@ -77,7 +77,7 @@ public class HistoryController {
     //   "brand": "Method"
     // }
     //
-    // 201 Created, no body.
+    // 201 Created (new pair) or 200 OK (existing user+ean), no body.
 
     @PostMapping("/scan")
     public ResponseEntity<Void> recordScan(
@@ -91,11 +91,15 @@ public class HistoryController {
             return ResponseEntity.badRequest().build();
         }
 
-        // 👇 NEW: make sure an app_user exists for this UUID so FK on scan_history.user_id passes
+        // Ensure this user actually exists. If not, treat as client error:
+        // the app should have called /api/v1/users/register first.
         try {
             appUserService.ensureUserExistsById(userId, null, null);
+        } catch (IllegalArgumentException ex) {
+            log.warn("HistoryController.recordScan: user not found for id={} → 400", userId);
+            return ResponseEntity.badRequest().build();
         } catch (Exception ex) {
-            log.error("HistoryController.recordScan: failed to ensure app_user for id={}", userId, ex);
+            log.error("HistoryController.recordScan: failed to check app_user for id={}", userId, ex);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
 
