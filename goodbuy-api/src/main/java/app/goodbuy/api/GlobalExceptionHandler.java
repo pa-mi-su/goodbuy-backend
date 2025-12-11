@@ -36,6 +36,26 @@ public class GlobalExceptionHandler {
     }
 
     /* ----------------------------
+       400 - IllegalArgument / IllegalState (bad client usage)
+       ---------------------------- */
+    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
+    public ResponseEntity<ErrorResponse> handleIllegalArgumentOrState(
+            RuntimeException ex, HttpServletRequest req) {
+
+        String msg = ex.getMessage() != null ? ex.getMessage() : "Invalid request";
+
+        log.warn("Bad request at {}: {} ({})",
+                req.getRequestURI(), msg, ex.getClass().getSimpleName());
+
+        return build(
+                HttpStatus.BAD_REQUEST,
+                "invalid_request",
+                msg,
+                req.getRequestURI()
+        );
+    }
+
+    /* ----------------------------
        422 - @PathVariable/@RequestParam
        ---------------------------- */
     @ExceptionHandler(ConstraintViolationException.class)
