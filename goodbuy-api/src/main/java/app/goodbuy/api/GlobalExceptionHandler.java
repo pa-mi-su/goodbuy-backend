@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -51,6 +52,35 @@ public class GlobalExceptionHandler {
                 HttpStatus.BAD_REQUEST,
                 "invalid_request",
                 msg,
+                req.getRequestURI()
+        );
+    }
+
+    /* ----------------------------
+       409 - Data integrity / unique constraints (e.g. duplicate email)
+       ---------------------------- */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
+            DataIntegrityViolationException ex, HttpServletRequest req) {
+
+        // Log full details on the server for debugging
+        Throwable root = ex.getMostSpecificCause();
+        String rootMsg = root != null ? root.getMessage() : ex.getMessage();
+
+        log.warn("DataIntegrityViolation at {}: {}", req.getRequestURI(), rootMsg, ex);
+
+        // Safe client-facing message
+        String safeMessage = "We couldn’t save your request. Please try again.";
+
+        // If it looks like an email unique constraint, give a nicer message
+        if (rootMsg != null && rootMsg.toLowerCase().contains("email")) {
+            safeMessage = "An account already exists with that email.";
+        }
+
+        return build(
+                HttpStatus.CONFLICT,
+                "conflict",
+                safeMessage,
                 req.getRequestURI()
         );
     }
@@ -124,16 +154,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleAnyUnexpected(
             Exception ex, HttpServletRequest req) {
 
+        // Log the full exception server-side
         log.error("Unhandled exception at {}: {}", req.getRequestURI(), ex.getMessage(), ex);
 
-        // include class name for easier debugging when testing with curl
-        String msg = ex.getClass().getSimpleName() +
-                (ex.getMessage() != null ? ": " + ex.getMessage() : "");
+        // But send a generic, safe message to the client
+        String msgForClient = "Something went wrong on our side. Please try again.";
 
         return build(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "server_error",
-                msg,
+                msgForClient,
                 req.getRequestURI()
         );
     }
