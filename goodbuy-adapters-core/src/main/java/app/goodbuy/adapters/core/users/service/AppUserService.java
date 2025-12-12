@@ -34,40 +34,46 @@ public class AppUserService {
     }
 
     /**
-     * Register a user by email, or "touch" their lastSeenAt if already present.
+     * Register a user by email.
      *
-     * This is used by the /api/v1/users/register endpoint.
+     * Behavior:
+     *  - If email is NEW  → create user and return 201.
+     *  - If email EXISTS → 409 CONFLICT with a clean message.
+     *
+     * No auto-login by email, no SQL error leaks.
      */
     @Transactional
     public AppUserEntity registerOrTouch(String email, String platform, String appVersion) {
         if (email == null || email.isBlank()) {
-            throw new IllegalArgumentException("email must not be blank");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "email must not be blank");
         }
 
         String trimmedEmail = email.trim().toLowerCase();
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
-        // Make sure AppUserRepository has: Optional<AppUserEntity> findByEmailIgnoreCase(String email);
+        // Ensure AppUserRepository has: Optional<AppUserEntity> findByEmailIgnoreCase(String email);
         Optional<AppUserEntity> existingOpt = appUserRepository.findByEmailIgnoreCase(trimmedEmail);
 
-        AppUserEntity user = existingOpt.orElseGet(AppUserEntity::new);
+        if (existingOpt.isPresent()) {
+            AppUserEntity existing = existingOpt.get();
+            log.info("AppUserService.registerOrTouch: email already registered for id={} email='{}'",
+                    existing.getId(), existing.getEmail());
 
-        if (user.getId() == null) {
-            // new user
-            user.setEmail(trimmedEmail);
-            user.setPlatform(platform);
-            user.setAppVersion(appVersion);
-            user.setCreatedAt(now);
-            log.info("AppUserService.registerOrTouch: creating new user email='{}'", trimmedEmail);
-        } else {
-            // existing user, keep email but update metadata
-            log.info("AppUserService.registerOrTouch: touching existing user id={} email='{}'",
-                    user.getId(), user.getEmail());
-            user.setPlatform(platform != null ? platform : user.getPlatform());
-            user.setAppVersion(appVersion != null ? appVersion : user.getAppVersion());
+            // Do NOT auto-login or hand out the ID.
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "That email is already registered with GoodBuy."
+            );
         }
 
+        AppUserEntity user = new AppUserEntity();
+        user.setEmail(trimmedEmail);
+        user.setPlatform(platform);
+        user.setAppVersion(appVersion);
+        user.setCreatedAt(now);
         user.setLastSeenAt(now);
+
+        log.info("AppUserService.registerOrTouch: creating new user email='{}'", trimmedEmail);
 
         return appUserRepository.save(user);
     }
@@ -79,7 +85,7 @@ public class AppUserService {
     /**
      * Lookup user by ID (UUID string). If not found, THROW.
      *
-     * For /api/v1/users/me we now surface a proper 404 so the client
+     * For /api/v1/users/me we surface a 404 so the client
      * can clear its local session and re-register if the backend DB
      * has been reset or the user row is gone.
      */
@@ -113,21 +119,57 @@ public class AppUserService {
 
     /**
      * Update the user's email address.
+     *
+     * Behavior:
+     *   - 400 if inputs are bad
+     *   - 400 if userId format is invalid
+     *   - 404 if user not found
+     *   - 409 if another user already uses that email
+     *   - No SQL leaks to the client
      */
     @Transactional
     public AppUserEntity updateEmail(String userId, String newEmail) {
         if (userId == null || userId.isBlank()) {
-            throw new IllegalArgumentException("userId must not be blank");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId must not be blank");
         }
         if (newEmail == null || newEmail.isBlank()) {
-            throw new IllegalArgumentException("email must not be blank");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "email must not be blank");
         }
 
-        UUID uuid = UUID.fromString(userId.trim());
+        final UUID uuid;
+        try {
+            uuid = UUID.fromString(userId.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid userId format");
+        }
+
         AppUserEntity user = appUserRepository.findById(uuid)
-                .orElseThrow(() -> new IllegalArgumentException("User not found for id=" + userId));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "User not found"
+                ));
 
         String trimmedEmail = newEmail.trim().toLowerCase();
+
+        // If they submit the same email (ignoring case), treat as no-op.
+        if (trimmedEmail.equalsIgnoreCase(user.getEmail())) {
+            log.info("AppUserService.updateEmail: no-op (same email) for user id={}", userId);
+            user.setLastSeenAt(OffsetDateTime.now(ZoneOffset.UTC));
+            return appUserRepository.save(user);
+        }
+
+        // Check if another user already owns this email.
+        appUserRepository.findByEmailIgnoreCase(trimmedEmail).ifPresent(existing -> {
+            if (!existing.getId().equals(user.getId())) {
+                log.info("AppUserService.updateEmail: email '{}' already in use by id={}",
+                        trimmedEmail, existing.getId());
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "That email is already in use."
+                );
+            }
+        });
+
         user.setEmail(trimmedEmail);
         user.setLastSeenAt(OffsetDateTime.now(ZoneOffset.UTC));
 
