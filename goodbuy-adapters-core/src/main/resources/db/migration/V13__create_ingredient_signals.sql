@@ -1,5 +1,4 @@
 -- V13__create_ingredient_signals.sql
-BEGIN;
 
 CREATE TABLE IF NOT EXISTS ingredient_signals (
     ingredient_id BIGINT PRIMARY KEY REFERENCES ingredients(id) ON DELETE CASCADE,
@@ -16,4 +15,4 @@ CREATE TABLE IF NOT EXISTS ingredient_signals (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-COMMIT;
+

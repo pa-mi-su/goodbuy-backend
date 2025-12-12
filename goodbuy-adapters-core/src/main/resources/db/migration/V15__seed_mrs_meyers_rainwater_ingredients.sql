@@ -3,8 +3,6 @@
 -- for Mrs. Meyer's Clean Day Laundry Detergent Rain Water
 -- EAN: 00808124115576
 
-BEGIN;
-
 -- ─────────────────────────────────────────────
 -- 1) INGREDIENTS: UPSERT 22 CANONICAL INGREDIENTS
 -- ─────────────────────────────────────────────

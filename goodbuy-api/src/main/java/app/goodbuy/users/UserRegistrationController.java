@@ -14,23 +14,27 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * REST endpoint for registering GoodBuy app users by email
  * and fetching/updating a simple profile.
  *
- * iOS registration call:
+ * Registration call (public):
  *   POST /api/v1/users/register
- *   {
- *     "email": "user@example.com",
- *     "platform": "iOS",
- *     "appVersion": "1.0"
- *   }
  *
- * Profile calls (use X-GoodBuy-User-Id header):
- *
+ * Profile calls (protected):
  *   GET /api/v1/users/me
  *   PUT /api/v1/users/me/email
+ *
+ * Auth for protected endpoints:
+ *   - Client sends: X-Session-Token
+ *   - Server derives user via SessionTokenAuthFilter and attaches:
+ *       request.setAttribute("goodbuyUser", AppUserEntity)
+ *
+ * IMPORTANT:
+ *   - DO NOT require X-GoodBuy-User-Id anymore.
+ *   - User identity must come from the authenticated session token.
  */
 @RestController
 @RequestMapping("/api/v1/users")
@@ -38,7 +42,12 @@ import org.springframework.web.bind.annotation.*;
 public class UserRegistrationController {
 
     private static final Logger log = LoggerFactory.getLogger(UserRegistrationController.class);
-    private static final String USER_HEADER = "X-GoodBuy-User-Id";
+
+    /**
+     * Must match what SessionTokenAuthFilter sets:
+     * request.setAttribute("goodbuyUser", user)
+     */
+    private static final String AUTH_USER_ATTR = "goodbuyUser";
 
     private final AppUserService appUserService;
 
@@ -47,7 +56,7 @@ public class UserRegistrationController {
     }
 
     // ─────────────────────────────────────────────────────
-    // Registration
+    // Registration (PUBLIC)
     // ─────────────────────────────────────────────────────
 
     @PostMapping("/register")
@@ -75,20 +84,22 @@ public class UserRegistrationController {
     }
 
     // ─────────────────────────────────────────────────────
-    // Profile: get current user (by X-GoodBuy-User-Id)
+    // Profile: get current user (PROTECTED via X-Session-Token)
     // ─────────────────────────────────────────────────────
 
     @GetMapping("/me")
     public ResponseEntity<UserProfileResponse> getMe(HttpServletRequest request) {
-        String userId = extractUserId(request);
+        AppUserEntity authedUser = requireAuthenticatedUser(request);
+
+        String userId = authedUser.getId().toString();
         log.info("UserRegistrationController.getMe userId={}", userId);
 
+        // If you prefer strict behavior, replace getOrCreateById with a getByIdOrThrow.
         final AppUserEntity user;
         try {
             user = appUserService.getOrCreateById(userId);
         } catch (IllegalArgumentException ex) {
-            // Invalid UUID or user not found → client bug (never registered)
-            log.warn("UserRegistrationController.getMe: invalid or unknown userId='{}'", userId);
+            log.warn("UserRegistrationController.getMe: invalid/unknown authed userId='{}'", userId);
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
 
@@ -109,7 +120,7 @@ public class UserRegistrationController {
     }
 
     // ─────────────────────────────────────────────────────
-    // Profile: update email
+    // Profile: update email (PROTECTED via X-Session-Token)
     // ─────────────────────────────────────────────────────
 
     @PutMapping("/me/email")
@@ -117,7 +128,9 @@ public class UserRegistrationController {
             @Valid @RequestBody UpdateEmailRequest body,
             HttpServletRequest request
     ) {
-        String userId = extractUserId(request);
+        AppUserEntity authedUser = requireAuthenticatedUser(request);
+
+        String userId = authedUser.getId().toString();
         log.info("UserRegistrationController.updateEmail userId={} email='{}'",
                 userId, body.getEmail());
 
@@ -125,7 +138,6 @@ public class UserRegistrationController {
         try {
             user = appUserService.updateEmail(userId, body.getEmail());
         } catch (IllegalArgumentException ex) {
-            // Either invalid userId or user not found or invalid email → treat as 400
             log.warn("UserRegistrationController.updateEmail: bad input for userId='{}': {}",
                     userId, ex.getMessage());
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
@@ -148,15 +160,17 @@ public class UserRegistrationController {
     }
 
     // ─────────────────────────────────────────────────────
-    // Helper
+    // Helpers
     // ─────────────────────────────────────────────────────
 
-    private static String extractUserId(HttpServletRequest request) {
-        String userId = request.getHeader(USER_HEADER);
-        if (userId == null || userId.isBlank()) {
-            // You can later replace this with a proper 400 via @ExceptionHandler
-            throw new IllegalStateException("Missing " + USER_HEADER + " header");
+    private static AppUserEntity requireAuthenticatedUser(HttpServletRequest request) {
+        Object obj = request.getAttribute(AUTH_USER_ATTR);
+        if (obj instanceof AppUserEntity user) {
+            return user;
         }
-        return userId.trim();
+
+        // If the filter didn’t attach the user (misconfig / accidentally public path),
+        // treat as UNAUTHORIZED (not a 500).
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Valid session token is required");
     }
 }
