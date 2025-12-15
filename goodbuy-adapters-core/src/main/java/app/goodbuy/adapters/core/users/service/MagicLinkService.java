@@ -18,22 +18,6 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Core logic for passwordless magic-link login:
- *
- *  - createLoginTokenForEmail(email, ip, ua)
- *      -> if user exists, creates token, sends email via SES
- *      -> if user does NOT exist, no-op (for security) and returns Optional.empty()
- *
- *  - validateAndConsumeToken(token, ip, ua)
- *      -> validates token, marks used, returns the AppUserEntity
- *
- *  - createSessionToken(user)
- *      -> creates an opaque session token string for the user
- *
- *  - findUserBySessionToken(token)
- *      -> resolve a user from a (magic-link) session token
- */
 @Service
 public class MagicLinkService {
 
@@ -43,15 +27,7 @@ public class MagicLinkService {
     private final MagicLinkTokenRepository tokenRepository;
     private final MagicLoginEmailService emailService;
 
-    /**
-     * Base deep-link for the iOS app, e.g.:
-     *   goodbuyapp://magic-login?token=
-     */
     private final String magicLinkAppBase;
-
-    /**
-     * Lifetime of a token in minutes.
-     */
     private final int tokenTtlMinutes;
 
     public MagicLinkService(AppUserRepository appUserRepository,
@@ -68,16 +44,6 @@ public class MagicLinkService {
         this.tokenTtlMinutes = tokenTtlMinutes;
     }
 
-    // ─────────────────────────────────────────────────────
-    // Create magic link for an email (request flow)
-    // ─────────────────────────────────────────────────────
-
-    /**
-     * Create a login token if the email exists, send email, and return the token entity.
-     *
-     * Security: this method NEVER throws 404 for "email not found" because your
-     * controller wants to always respond 200 with a generic message.
-     */
     @Transactional
     public Optional<MagicLinkTokenEntity> createLoginTokenForEmail(String email,
                                                                    String ipAddress,
@@ -90,7 +56,6 @@ public class MagicLinkService {
 
         Optional<AppUserEntity> userOpt = appUserRepository.findByEmailIgnoreCase(trimmedEmail);
         if (userOpt.isEmpty()) {
-            // Do NOT reveal that the email doesn't exist.
             log.info("MagicLinkService.createLoginTokenForEmail: no user found for email='{}' (no-op)", trimmedEmail);
             return Optional.empty();
         }
@@ -100,7 +65,6 @@ public class MagicLinkService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         OffsetDateTime expiresAt = now.plusMinutes(tokenTtlMinutes);
 
-        // Random opaque token that will go into the deep link
         String tokenString = UUID.randomUUID().toString().replace("-", "");
 
         MagicLinkTokenEntity tokenEntity = new MagicLinkTokenEntity();
@@ -120,10 +84,6 @@ public class MagicLinkService {
         log.info("MagicLinkService.createLoginTokenForEmail: created magic link token id={} token='{}' for userId={} email='{}'",
                 tokenEntity.getId(), tokenString, user.getId(), trimmedEmail);
 
-        // ── IMPORTANT DEV BEHAVIOR ───────────────────────────
-        // In dev, SES may not have credentials. We MUST NOT let that
-        // blow up the transaction, or the token row gets rolled back.
-        // So: try to send the email, but swallow failures.
         try {
             emailService.sendMagicLoginEmail(trimmedEmail, deepLink);
         } catch (Exception ex) {
@@ -135,17 +95,6 @@ public class MagicLinkService {
         return Optional.of(tokenEntity);
     }
 
-    // ─────────────────────────────────────────────────────
-    // Validate & consume token (consume flow)
-    // ─────────────────────────────────────────────────────
-
-    /**
-     * Validate and consume a magic-link token, returning the associated user.
-     *
-     * - 400 if token blank
-     * - 404 if token not found
-     * - 410 if expired or already used
-     */
     @Transactional
     public AppUserEntity validateAndConsumeToken(String token, String ipAddress, String userAgent) {
         if (token == null || token.isBlank()) {
@@ -169,14 +118,11 @@ public class MagicLinkService {
             );
         }
 
-        // Mark token as used
         tokenEntity.setUsedAt(now);
-        // Optionally update last IP / UA for audit
         tokenEntity.setIpAddress(ipAddress);
         tokenEntity.setUserAgent(userAgent);
         tokenRepository.save(tokenEntity);
 
-        // Load user
         AppUserEntity user = appUserRepository.findById(tokenEntity.getUserId())
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
@@ -192,17 +138,6 @@ public class MagicLinkService {
         return saved;
     }
 
-    // ─────────────────────────────────────────────────────
-    // Session token creation (for client to store)
-    // ─────────────────────────────────────────────────────
-
-    /**
-     * Create an opaque session token for the given user.
-     *
-     * For now this just generates a random string and logs it.
-     * (We’re currently reusing the magic-link token as the session token,
-     * but this is here if we later want a separate session table.)
-     */
     public String createSessionToken(AppUserEntity user) {
         String sessionToken = UUID.randomUUID().toString().replace("-", "");
 
@@ -212,18 +147,6 @@ public class MagicLinkService {
         return sessionToken;
     }
 
-    // ─────────────────────────────────────────────────────
-    // Resolve user from session token (used by filter)
-    // ─────────────────────────────────────────────────────
-
-    /**
-     * Resolve a user from a session token.
-     *
-     * We currently treat the magic-link token itself as the session token:
-     *  - token must exist
-     *  - must be expiredAt > now
-     *  - must have been consumed at least once (usedAt != null)
-     */
     @Transactional(readOnly = true)
     public Optional<AppUserEntity> findUserBySessionToken(String token) {
         if (token == null || token.isBlank()) {
@@ -247,5 +170,14 @@ public class MagicLinkService {
         }
 
         return appUserRepository.findById(tokenEntity.getUserId());
+    }
+
+    /**
+     * ✅ Optional helper for the auth filter:
+     * - returns true if token header is present and looks like a valid session
+     */
+    @Transactional(readOnly = true)
+    public boolean isValidSessionToken(String token) {
+        return findUserBySessionToken(token).isPresent();
     }
 }

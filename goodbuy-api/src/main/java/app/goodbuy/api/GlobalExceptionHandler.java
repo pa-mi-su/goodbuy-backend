@@ -63,16 +63,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
             DataIntegrityViolationException ex, HttpServletRequest req) {
 
-        // Log full details on the server for debugging
         Throwable root = ex.getMostSpecificCause();
         String rootMsg = root != null ? root.getMessage() : ex.getMessage();
 
         log.warn("DataIntegrityViolation at {}: {}", req.getRequestURI(), rootMsg, ex);
 
-        // Safe client-facing message
         String safeMessage = "We couldn’t save your request. Please try again.";
 
-        // If it looks like an email unique constraint, give a nicer message
         if (rootMsg != null && rootMsg.toLowerCase().contains("email")) {
             safeMessage = "An account already exists with that email.";
         }
@@ -137,8 +134,11 @@ public class GlobalExceptionHandler {
         String reason = ex.getReason() != null ? ex.getReason() : status.toString();
 
         String code = switch (status.value()) {
+            case 401 -> "unauthorized";
+            case 403 -> "forbidden";
             case 404 -> "not_found";
-            case 422 -> reason.toLowerCase().contains("invalid") ? "invalid_request" : "invalid_request";
+            case 410 -> "gone";
+            case 422 -> "invalid_request";
             default -> "error";
         };
 
@@ -154,10 +154,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleAnyUnexpected(
             Exception ex, HttpServletRequest req) {
 
-        // Log the full exception server-side
         log.error("Unhandled exception at {}: {}", req.getRequestURI(), ex.getMessage(), ex);
 
-        // But send a generic, safe message to the client
         String msgForClient = "Something went wrong on our side. Please try again.";
 
         return build(
