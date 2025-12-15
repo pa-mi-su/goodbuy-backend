@@ -1,5 +1,6 @@
 package app.goodbuy.auth.magiclink;
 
+import app.goodbuy.adapters.core.sessions.service.SessionService;
 import app.goodbuy.adapters.core.users.model.AppUserEntity;
 import app.goodbuy.adapters.core.users.service.MagicLinkService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,9 +20,12 @@ public class MagicLinkAuthController {
     private static final Logger log = LoggerFactory.getLogger(MagicLinkAuthController.class);
 
     private final MagicLinkService magicLinkService;
+    private final SessionService sessionService;
 
-    public MagicLinkAuthController(MagicLinkService magicLinkService) {
+    public MagicLinkAuthController(MagicLinkService magicLinkService,
+                                   SessionService sessionService) {
         this.magicLinkService = magicLinkService;
+        this.sessionService = sessionService;
     }
 
     @PostMapping("/request")
@@ -50,12 +54,11 @@ public class MagicLinkAuthController {
 
         log.info("MagicLinkAuthController.consumeMagicLink token='{}' ip={}", body.token(), ip);
 
-        // Consume (mark used, validate expiry, etc.)
+        // 1) Consume magic link (mark used, validate expiry, update lastSeen, etc.)
         AppUserEntity user = magicLinkService.validateAndConsumeToken(body.token(), ip, ua);
 
-        // ✅ IMPORTANT: session token IS the consumed magic token
-        // This matches your existing SessionTokenAuthFilter behavior (consumed + unexpired token = session).
-        String sessionToken = body.token();
+        // 2) Create a REAL session token (stored in user_session)
+        String sessionToken = sessionService.createSessionTokenForUser(user, ip, ua);
 
         log.info("MagicLinkAuthController.consumeMagicLink SUCCESS userId={} email={}",
                 user.getId(), user.getEmail());

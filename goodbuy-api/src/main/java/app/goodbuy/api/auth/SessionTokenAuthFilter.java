@@ -1,7 +1,7 @@
 package app.goodbuy.api.auth;
 
+import app.goodbuy.adapters.core.sessions.service.SessionService;
 import app.goodbuy.adapters.core.users.model.AppUserEntity;
-import app.goodbuy.adapters.core.users.service.MagicLinkService;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -26,7 +26,7 @@ import java.util.Optional;
  *
  *  - Skips public endpoints (/actuator, /api/v1/auth/magic-link/**, /api/v1/users/register, OPTIONS)
  *  - For everything else, requires a valid X-Session-Token header
- *  - Resolves the user via MagicLinkService.findUserBySessionToken
+ *  - Resolves the user via SessionService.findUserBySessionToken
  *  - Attaches the user as request attribute "goodbuyUser"
  *
  * Returns structured JSON errors so clients can detect session expiry and bounce cleanly.
@@ -40,10 +40,10 @@ public class SessionTokenAuthFilter implements Filter {
     public static final String SESSION_HEADER = "X-Session-Token";
     public static final String AUTH_USER_ATTR = "goodbuyUser";
 
-    private final MagicLinkService magicLinkService;
+    private final SessionService sessionService;
 
-    public SessionTokenAuthFilter(MagicLinkService magicLinkService) {
-        this.magicLinkService = magicLinkService;
+    public SessionTokenAuthFilter(SessionService sessionService) {
+        this.sessionService = sessionService;
     }
 
     @Override
@@ -80,7 +80,8 @@ public class SessionTokenAuthFilter implements Filter {
 
         final Optional<AppUserEntity> userOpt;
         try {
-            userOpt = magicLinkService.findUserBySessionToken(sessionToken);
+            // ✅ REAL SESSION TOKEN VALIDATION (NOT magic token)
+            userOpt = sessionService.findUserBySessionToken(sessionToken);
         } catch (Exception ex) {
             // IMPORTANT:
             // This is NOT an auth failure (token might be fine).
