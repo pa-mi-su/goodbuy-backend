@@ -10,9 +10,3 @@
 ALTER TABLE products
     ADD COLUMN IF NOT EXISTS primary_image_s3_url TEXT;
 
--- ─────────────────────────────────────────────
--- product_missing_report
--- ─────────────────────────────────────────────
-ALTER TABLE product_missing_report
-    ADD COLUMN IF NOT EXISTS front_image_s3_url TEXT,
-    ADD COLUMN IF NOT EXISTS back_image_s3_url  TEXT;

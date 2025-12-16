@@ -20,6 +20,9 @@ public class SlackNotificationAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(SlackNotificationAdapter.class);
 
+    // Keep logs readable + avoid dumping huge payloads
+    private static final int LOG_PREVIEW_CHARS = 600;
+
     private final String defaultWebhookUrl;
     private final String ingredientsWebhookUrl;
     private final HttpClient httpClient;
@@ -68,9 +71,8 @@ public class SlackNotificationAdapter {
     private void sendToWebhook(String webhookUrl, String channelKey, String text) {
         if (webhookUrl == null || webhookUrl.isBlank()) {
             log.info(
-                    "SlackNotificationAdapter[{}]: webhook URL not configured; " +
-                            "skipping Slack notification. Message would have been:\n{}",
-                    channelKey, text
+                    "SlackNotificationAdapter[{}]: webhook URL not configured; skipping Slack notification. MessageLen={}. Preview:\n{}",
+                    channelKey, safeLen(text), preview(text)
             );
             return;
         }
@@ -78,8 +80,10 @@ public class SlackNotificationAdapter {
         try {
             String payload = "{\"text\":" + toJsonString(text) + "}";
 
-            log.info("SlackNotificationAdapter[{}]: sending notification (len={}):\n{}",
-                    channelKey, webhookUrl.length(), text);
+            log.info(
+                    "SlackNotificationAdapter[{}]: sending notification. MessageLen={}. Preview:\n{}",
+                    channelKey, safeLen(text), preview(text)
+            );
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(webhookUrl))
@@ -108,12 +112,34 @@ public class SlackNotificationAdapter {
     }
 
     private static String last8(String s) {
+        if (s == null || s.isBlank()) return "";
         return s.substring(Math.max(0, s.length() - 8));
     }
 
+    private static int safeLen(String s) {
+        return (s == null) ? 0 : s.length();
+    }
+
+    private static String preview(String s) {
+        if (s == null || s.isBlank()) return "(empty)";
+        if (s.length() <= LOG_PREVIEW_CHARS) return s;
+        return s.substring(0, LOG_PREVIEW_CHARS) + "…";
+    }
+
+    /**
+     * Escapes a Java string for embedding inside a JSON string literal.
+     * Handles quotes, backslashes, and common control characters.
+     */
     private String toJsonString(String s) {
         if (s == null) return "\"\"";
-        String escaped = s.replace("\\", "\\\\").replace("\"", "\\\"");
+
+        String escaped = s
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+                .replace("\t", "\\t");
+
         return "\"" + escaped + "\"";
     }
 }
