@@ -156,6 +156,15 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) domain={} s3Url={}",
                 product.getId(), product.getEan(), isNew, product.getDomain(), safe(product.getPrimaryImageS3Url()));
 
+        // ✅ BUGFIX #1:
+        // If this product is NOT in a supported domain, DO NOT seed ingredients and DO NOT report missing ingredients.
+        // This prevents "unsupported domain" items from being treated like "missing ingredients."
+        if (!isSupportedDomain(domainEnum)) {
+            log.info("saveSnapshot: domain={} is not supported for ingredient seeding. Skipping ingredients + scoring. gtin={}",
+                    domainEnum.name(), ean14);
+            return;
+        }
+
         // ───────────── INGREDIENT LINKS (SKELETON SEEDING) ─────────────
         List<ProductDetailDto.IngredientDto> dtoIngredients = dto.ingredients();
         if (dtoIngredients == null || dtoIngredients.isEmpty()) {
@@ -199,8 +208,8 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
             Ingredient ingredient = resolveOrCreateIngredient(canonicalKey, displayName, ean14);
 
-            if (ingredient.getId() == null) {
-                log.warn("saveSnapshot: ingredient entity has null id for canonicalKey='{}' — skipping link", canonicalKey);
+            if (ingredient == null || ingredient.getId() == null) {
+                log.warn("saveSnapshot: ingredient resolution failed for canonicalKey='{}' — skipping link", canonicalKey);
                 continue;
             }
 
@@ -231,6 +240,13 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         } catch (Exception ex) {
             log.warn("saveSnapshot: product scoring FAILED for gtin={} err={}", ean14, ex.toString());
         }
+    }
+
+    // ✅ Define what "supported" means (MVP = CLEANING only)
+    private boolean isSupportedDomain(ProductDomain domain) {
+        if (domain == null) return false;
+        // Avoid hard dependency on enum constants beyond name()
+        return "CLEANING".equalsIgnoreCase(domain.name());
     }
 
     // ───────────── Ingredient resolution ─────────────

@@ -4,64 +4,82 @@ import jakarta.persistence.*;
 import java.time.OffsetDateTime;
 
 /**
- * Stored whenever a user reports a missing product
- * (e.g. "Help catalog this product").
+ * Global evidence that a product has already been reported
+ * for a specific reason (missing_product, unclear_ingredients).
  *
- * This lets us:
- *  - See which EANs users care about
- *  - Backfill them into our catalog/ingredients DB
- *  - Audit when/how they were reported
+ * Backed by table: product_evidence_report
+ *
+ * Dedupe rule (ENFORCED BY DB):
+ *   ONE ROW PER (ean, reason)
+ *
+ * This table ALSO stores S3 URLs for user-submitted photos
+ * when reason = missing_product.
  */
 @Entity
-@Table(name = "product_missing_report")
-public class MissingProductReportEntity {
+@Table(
+        name = "product_evidence_report",
+        uniqueConstraints = {
+                @UniqueConstraint(
+                        name = "ux_product_evidence_ean_reason",
+                        columnNames = {"ean", "reason"}
+                )
+        }
+)
+public class ProductEvidenceReportEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** The scanned product code. EAN/GTIN/UPC etc. */
+    /** Normalized GTIN (digits only, stored as GTIN-14) */
     @Column(nullable = false, length = 32)
     private String ean;
 
-    /** Optional free-text name as seen in the client (if any). */
-    @Column(length = 255)
+    /**
+     * Reason this evidence exists.
+     *
+     * Expected values:
+     *  - missing_product
+     *  - unclear_ingredients
+     */
+    @Column(nullable = false, length = 64)
+    private String reason;
+
+    @Column(name = "product_name", length = 255)
     private String productName;
 
-    /** Optional brand string. */
     @Column(length = 255)
     private String brand;
 
-    @Column(length = 64)
+    @Column(name = "app_version", length = 64)
     private String appVersion;
 
     @Column(length = 32)
-    private String platform; // iOS, Android, etc.
+    private String platform;
 
     @Column(columnDefinition = "text")
     private String notes;
 
-    /** S3 URLs for user-submitted photos */
-    @Column(name = "front_image_s3_url")
+    // ✅ NEW: S3-hosted user images (used for missing_product)
+    @Column(name = "front_image_s3_url", columnDefinition = "text")
     private String frontImageS3Url;
 
-    @Column(name = "back_image_s3_url")
+    @Column(name = "back_image_s3_url", columnDefinition = "text")
     private String backImageS3Url;
 
-    @Column(nullable = false)
+    /** Last time this evidence was observed/reported */
+    @Column(name = "occurred_at", nullable = false)
     private OffsetDateTime occurredAt;
 
-    @Column(nullable = false)
+    /** First time this evidence was created */
+    @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
     @PrePersist
     protected void onCreate() {
-        if (createdAt == null) {
-            createdAt = OffsetDateTime.now();
-        }
-        if (occurredAt == null) {
-            occurredAt = createdAt;
-        }
+        OffsetDateTime now = OffsetDateTime.now();
+        if (createdAt == null) createdAt = now;
+        if (occurredAt == null) occurredAt = now;
     }
 
     // ───── getters & setters ─────
@@ -70,6 +88,9 @@ public class MissingProductReportEntity {
 
     public String getEan() { return ean; }
     public void setEan(String ean) { this.ean = ean; }
+
+    public String getReason() { return reason; }
+    public void setReason(String reason) { this.reason = reason; }
 
     public String getProductName() { return productName; }
     public void setProductName(String productName) { this.productName = productName; }
