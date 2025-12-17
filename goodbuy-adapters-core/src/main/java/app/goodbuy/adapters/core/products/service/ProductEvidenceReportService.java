@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -20,6 +21,17 @@ public class ProductEvidenceReportService {
 
     private static final Logger log =
             LoggerFactory.getLogger(ProductEvidenceReportService.class);
+
+    // ✅ Canonical reasons (3 scenarios)
+    public static final String REASON_MISSING_PRODUCT = "missing_product";
+    public static final String REASON_UNCLEAR_INGREDIENTS = "unclear_ingredients";
+    public static final String REASON_OUT_OF_DOMAIN = "out_of_domain";
+
+    private static final Set<String> ALLOWED_REASONS = Set.of(
+            REASON_MISSING_PRODUCT,
+            REASON_UNCLEAR_INGREDIENTS,
+            REASON_OUT_OF_DOMAIN
+    );
 
     private final ProductEvidenceReportRepository repo;
     private final SlackNotificationAdapter slack;
@@ -64,6 +76,9 @@ public class ProductEvidenceReportService {
         if (reasonNorm.isBlank()) {
             throw new IllegalArgumentException("reason is required");
         }
+        if (!ALLOWED_REASONS.contains(reasonNorm)) {
+            throw new IllegalArgumentException("unsupported reason: " + reasonNorm);
+        }
 
         ProductEvidenceReportEntity entity = repo
                 .findByEanAndReason(eanNorm, reasonNorm)
@@ -77,34 +92,32 @@ public class ProductEvidenceReportService {
             entity.setCreatedAt(now);
         }
 
-        // Always update “latest report” fields
-        entity.setProductName(productName);
-        entity.setBrand(brand);
-        entity.setAppVersion(appVersion);
-        entity.setPlatform(platform);
-        entity.setNotes(notes);
+        // Always update “latest report” fields (safe + useful)
+        entity.setProductName(trimOrNull(productName));
+        entity.setBrand(trimOrNull(brand));
+        entity.setAppVersion(trimOrNull(appVersion));
+        entity.setPlatform(trimOrNull(platform));
+        entity.setNotes(trimOrNull(notes));
         entity.setOccurredAt(now);
 
-        // ✅ FIX: store images for BOTH reasons (missing_product AND unclear_ingredients).
-        // (If you later add more reasons, this is still safe.)
         boolean frontProvided = (frontImageBytes != null && frontImageBytes.length > 0);
         boolean backProvided  = (backImageBytes  != null && backImageBytes.length  > 0);
 
         if (frontProvided) {
-            String url = uploadToS3(eanNorm, "front", frontImageBytes, frontContentType);
+            String url = uploadToS3(eanNorm, reasonNorm, "front", frontImageBytes, frontContentType);
             entity.setFrontImageS3Url(url);
         }
 
         if (backProvided) {
-            String url = uploadToS3(eanNorm, "back", backImageBytes, backContentType);
+            String url = uploadToS3(eanNorm, reasonNorm, "back", backImageBytes, backContentType);
             entity.setBackImageS3Url(url);
         }
 
         ProductEvidenceReportEntity saved = repo.save(entity);
 
-        // ✅ Improve Slack behavior:
-        // - Always notify on first report
-        // - Also notify if new images were provided (so Slack shows URLs)
+        // Slack:
+        // - always notify on first report
+        // - notify again if user provided new images (so Slack has URLs)
         if (isNew || frontProvided || backProvided) {
             slack.send(buildSlackText(saved));
         }
@@ -114,12 +127,14 @@ public class ProductEvidenceReportService {
 
     // ───────────────── helpers ─────────────────
 
-    private String uploadToS3(String ean, String kind, byte[] bytes, String contentType) {
+    private String uploadToS3(String ean, String reason, String kind, byte[] bytes, String contentType) {
         String ct = (contentType == null || contentType.isBlank())
                 ? "image/jpeg"
                 : contentType;
 
+        // Include reason in key so images don’t collide between scenarios.
         String key = "product-evidence/"
+                + reason + "/"
                 + ean + "/"
                 + kind + "/"
                 + DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(OffsetDateTime.now()).replace(":", "")
@@ -128,7 +143,7 @@ public class ProductEvidenceReportService {
                 + ".jpg";
 
         String url = imageStorage.uploadImage(key, bytes, ct);
-        log.info("ProductEvidenceReportService: uploaded {} image to S3 ean={} url={}", kind, ean, url);
+        log.info("ProductEvidenceReportService: uploaded {} image to S3 ean={} reason={} url={}", kind, ean, reason, url);
         return url;
     }
 
@@ -138,12 +153,19 @@ public class ProductEvidenceReportService {
                 + "• Reason: `" + e.getReason() + "`\n"
                 + "• Name: " + orDash(e.getProductName()) + "\n"
                 + "• Brand: " + orDash(e.getBrand()) + "\n"
+                + "• Notes: " + orDash(e.getNotes()) + "\n"
                 + "• Front Image: " + orDash(e.getFrontImageS3Url()) + "\n"
                 + "• Back Image: " + orDash(e.getBackImageS3Url());
     }
 
     private static String orDash(String v) {
         return (v == null || v.isBlank()) ? "-" : v;
+    }
+
+    private static String trimOrNull(String v) {
+        if (v == null) return null;
+        String t = v.trim();
+        return t.isEmpty() ? null : t;
     }
 
     private static String normalizeToGtin14DigitsOnly(String raw) {
