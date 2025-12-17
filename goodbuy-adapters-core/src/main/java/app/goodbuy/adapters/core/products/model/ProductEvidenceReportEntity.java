@@ -45,6 +45,18 @@ public class ProductEvidenceReportEntity {
     @Column(nullable = false, length = 64)
     private String reason;
 
+    /**
+     * Status of the report record.
+     *
+     * DB default: 'REPORTED'
+     * Expected values (initially):
+     *  - REPORTED
+     *
+     * (We can expand later: IN_PROGRESS, CLASSIFIED, IGNORED, RESOLVED, etc.)
+     */
+    @Column(name = "status", nullable = false, length = 32)
+    private String status;
+
     @Column(name = "product_name", length = 255)
     private String productName;
 
@@ -60,7 +72,7 @@ public class ProductEvidenceReportEntity {
     @Column(columnDefinition = "text")
     private String notes;
 
-    // ✅ NEW: S3-hosted user images (used for missing_product)
+    // S3-hosted user images (used for missing_product)
     @Column(name = "front_image_s3_url", columnDefinition = "text")
     private String frontImageS3Url;
 
@@ -72,7 +84,7 @@ public class ProductEvidenceReportEntity {
     private OffsetDateTime occurredAt;
 
     /** First time this evidence was created */
-    @Column(name = "created_at", nullable = false)
+    @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
     @PrePersist
@@ -80,6 +92,7 @@ public class ProductEvidenceReportEntity {
         OffsetDateTime now = OffsetDateTime.now();
         if (createdAt == null) createdAt = now;
         if (occurredAt == null) occurredAt = now;
+        if (status == null || status.isBlank()) status = "REPORTED";
     }
 
     // ───── getters & setters ─────
@@ -91,6 +104,9 @@ public class ProductEvidenceReportEntity {
 
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
+
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
 
     public String getProductName() { return productName; }
     public void setProductName(String productName) { this.productName = productName; }
