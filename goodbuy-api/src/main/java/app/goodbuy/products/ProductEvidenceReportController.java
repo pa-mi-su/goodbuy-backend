@@ -3,6 +3,7 @@ package app.goodbuy.products;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -50,8 +51,52 @@ public class ProductEvidenceReportController {
         );
     }
 
+    /**
+     * DB-backed evidence status lookup used by iOS ResultView.
+     *
+     * Expected client call:
+     *   GET /api/v1/products/evidence/status?ean=...&reason=...
+     *
+     * We accept BOTH query params for compatibility:
+     *  - ean
+     *  - productEan
+     */
+    @GetMapping("/status")
+    public ResponseEntity<ProductEvidenceStatusResponse> status(
+            @RequestParam(value = "ean", required = false) String ean,
+            @RequestParam(value = "productEan", required = false) String productEan,
+            @RequestParam("reason") String reason
+    ) {
+        String key = (productEan != null && !productEan.isBlank()) ? productEan : ean;
+        if (key == null || key.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        var opt = service.findActiveStatus(key, reason);
+
+        if (opt.isEmpty()) {
+            // ✅ IMPORTANT: 204 means “not reported” (not an error)
+            return ResponseEntity.noContent().build();
+        }
+
+        var entity = opt.get();
+
+        // ✅ Always return this shape (client decodes defensively)
+        return ResponseEntity.ok(new ProductEvidenceStatusResponse(
+                true,
+                entity.getStatus(),
+                true
+        ));
+    }
+
     public record ProductEvidenceReportResponse(
             Long id,
+            boolean alreadyReported
+    ) {}
+
+    public record ProductEvidenceStatusResponse(
+            boolean exists,
+            String status,
             boolean alreadyReported
     ) {}
 }
