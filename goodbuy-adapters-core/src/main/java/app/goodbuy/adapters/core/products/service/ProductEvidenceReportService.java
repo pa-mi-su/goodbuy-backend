@@ -11,9 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Locale;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 @Service
 @Transactional
@@ -31,6 +29,16 @@ public class ProductEvidenceReportService {
             REASON_MISSING_PRODUCT,
             REASON_UNCLEAR_INGREDIENTS,
             REASON_OUT_OF_DOMAIN
+    );
+
+    // ✅ Statuses that mean “already reported / active”
+    public static final String STATUS_REPORTED = "REPORTED";
+    public static final String STATUS_IN_PROGRESS = "IN_PROGRESS";
+    public static final String STATUS_RESOLVED = "RESOLVED";
+
+    private static final List<String> ACTIVE_STATUSES = List.of(
+            STATUS_REPORTED,
+            STATUS_IN_PROGRESS
     );
 
     private final ProductEvidenceReportRepository repo;
@@ -72,7 +80,7 @@ public class ProductEvidenceReportService {
             throw new IllegalArgumentException("ean must contain 12, 13, or 14 digits");
         }
 
-        String reasonNorm = (reason == null ? "" : reason).trim().toLowerCase(Locale.ROOT);
+        String reasonNorm = normalizeReason(reason);
         if (reasonNorm.isBlank()) {
             throw new IllegalArgumentException("reason is required");
         }
@@ -89,10 +97,15 @@ public class ProductEvidenceReportService {
         if (isNew) {
             entity.setEan(eanNorm);
             entity.setReason(reasonNorm);
-            entity.setCreatedAt(now);
+            entity.setStatus(STATUS_REPORTED); // explicit, matches DB default
         }
 
-        // Always update “latest report” fields (safe + useful)
+        // Defensive: never allow blank status to hit DB
+        if (entity.getStatus() == null || entity.getStatus().isBlank()) {
+            entity.setStatus(STATUS_REPORTED);
+        }
+
+        // Always update “latest report” fields
         entity.setProductName(trimOrNull(productName));
         entity.setBrand(trimOrNull(brand));
         entity.setAppVersion(trimOrNull(appVersion));
@@ -125,6 +138,21 @@ public class ProductEvidenceReportService {
         return new ProductEvidenceReportResult(saved, isNew);
     }
 
+    /**
+     * ✅ DB truth for ResultView / History / Favorites.
+     * Returns the active evidence record if present, else empty.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ProductEvidenceReportEntity> findActiveStatus(String ean, String reason) {
+        String eanNorm = normalizeToGtin14DigitsOnly(ean);
+        if (eanNorm == null) return Optional.empty();
+
+        String reasonNorm = normalizeReason(reason);
+        if (reasonNorm.isBlank() || !ALLOWED_REASONS.contains(reasonNorm)) return Optional.empty();
+
+        return repo.findByEanAndReasonAndStatusIn(eanNorm, reasonNorm, ACTIVE_STATUSES);
+    }
+
     // ───────────────── helpers ─────────────────
 
     private String uploadToS3(String ean, String reason, String kind, byte[] bytes, String contentType) {
@@ -132,7 +160,6 @@ public class ProductEvidenceReportService {
                 ? "image/jpeg"
                 : contentType;
 
-        // Include reason in key so images don’t collide between scenarios.
         String key = "product-evidence/"
                 + reason + "/"
                 + ean + "/"
@@ -151,6 +178,7 @@ public class ProductEvidenceReportService {
         return "*Product Evidence Reported*\n"
                 + "• EAN: `" + e.getEan() + "`\n"
                 + "• Reason: `" + e.getReason() + "`\n"
+                + "• Status: `" + orDash(e.getStatus()) + "`\n"
                 + "• Name: " + orDash(e.getProductName()) + "\n"
                 + "• Brand: " + orDash(e.getBrand()) + "\n"
                 + "• Notes: " + orDash(e.getNotes()) + "\n"
@@ -166,6 +194,10 @@ public class ProductEvidenceReportService {
         if (v == null) return null;
         String t = v.trim();
         return t.isEmpty() ? null : t;
+    }
+
+    private static String normalizeReason(String reason) {
+        return (reason == null ? "" : reason).trim().toLowerCase(Locale.ROOT);
     }
 
     private static String normalizeToGtin14DigitsOnly(String raw) {
