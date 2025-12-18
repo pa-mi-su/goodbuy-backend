@@ -11,7 +11,12 @@ import java.util.UUID;
 @Repository
 public interface ScanHistoryRepository extends JpaRepository<ScanHistoryEntity, Long> {
 
+    // Used by HistoryController → list scans
     List<ScanHistoryEntity> findByUserIdOrderByScannedAtDesc(UUID userId);
 
-    Optional<ScanHistoryEntity> findByUserIdAndEan(UUID userId, String ean); // ← ADD THIS
+    // Used by HistoryController → upsert scans
+    Optional<ScanHistoryEntity> findByUserIdAndEan(UUID userId, String ean);
+
+    // ✅ Used by AppUserService.countScansForUser (Profile screen)
+    long countByUserId(UUID userId);
 }

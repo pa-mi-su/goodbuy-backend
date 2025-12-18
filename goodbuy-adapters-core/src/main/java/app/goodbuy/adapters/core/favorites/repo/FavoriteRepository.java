@@ -18,4 +18,7 @@ public interface FavoriteRepository extends JpaRepository<FavoriteEntity, Long> 
     Optional<FavoriteEntity> findByUserIdAndEan(UUID userId, String ean);
 
     void deleteByUserIdAndEan(UUID userId, String ean);
+
+    // For profile metrics
+    long countByUserId(UUID userId);
 }

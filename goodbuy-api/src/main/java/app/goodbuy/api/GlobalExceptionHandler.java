@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -33,6 +34,52 @@ public class GlobalExceptionHandler {
         );
 
         return ResponseEntity.status(status).body(body);
+    }
+
+    /* ----------------------------
+       400 - IllegalArgument / IllegalState (bad client usage)
+       ---------------------------- */
+    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
+    public ResponseEntity<ErrorResponse> handleIllegalArgumentOrState(
+            RuntimeException ex, HttpServletRequest req) {
+
+        String msg = ex.getMessage() != null ? ex.getMessage() : "Invalid request";
+
+        log.warn("Bad request at {}: {} ({})",
+                req.getRequestURI(), msg, ex.getClass().getSimpleName());
+
+        return build(
+                HttpStatus.BAD_REQUEST,
+                "invalid_request",
+                msg,
+                req.getRequestURI()
+        );
+    }
+
+    /* ----------------------------
+       409 - Data integrity / unique constraints (e.g. duplicate email)
+       ---------------------------- */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
+            DataIntegrityViolationException ex, HttpServletRequest req) {
+
+        Throwable root = ex.getMostSpecificCause();
+        String rootMsg = root != null ? root.getMessage() : ex.getMessage();
+
+        log.warn("DataIntegrityViolation at {}: {}", req.getRequestURI(), rootMsg, ex);
+
+        String safeMessage = "We couldn’t save your request. Please try again.";
+
+        if (rootMsg != null && rootMsg.toLowerCase().contains("email")) {
+            safeMessage = "An account already exists with that email.";
+        }
+
+        return build(
+                HttpStatus.CONFLICT,
+                "conflict",
+                safeMessage,
+                req.getRequestURI()
+        );
     }
 
     /* ----------------------------
@@ -87,8 +134,11 @@ public class GlobalExceptionHandler {
         String reason = ex.getReason() != null ? ex.getReason() : status.toString();
 
         String code = switch (status.value()) {
+            case 401 -> "unauthorized";
+            case 403 -> "forbidden";
             case 404 -> "not_found";
-            case 422 -> reason.toLowerCase().contains("invalid") ? "invalid_request" : "invalid_request";
+            case 410 -> "gone";
+            case 422 -> "invalid_request";
             default -> "error";
         };
 
@@ -106,14 +156,12 @@ public class GlobalExceptionHandler {
 
         log.error("Unhandled exception at {}: {}", req.getRequestURI(), ex.getMessage(), ex);
 
-        // include class name for easier debugging when testing with curl
-        String msg = ex.getClass().getSimpleName() +
-                (ex.getMessage() != null ? ": " + ex.getMessage() : "");
+        String msgForClient = "Something went wrong on our side. Please try again.";
 
         return build(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "server_error",
-                msg,
+                msgForClient,
                 req.getRequestURI()
         );
     }

@@ -4,7 +4,9 @@ import app.goodbuy.adapters.core.favorites.FavoriteMapper;
 import app.goodbuy.adapters.core.favorites.model.FavoriteEntity;
 import app.goodbuy.adapters.core.favorites.repo.FavoriteRepository;
 import app.goodbuy.adapters.core.favorites.service.FavoriteService;
+import app.goodbuy.adapters.core.users.model.AppUserEntity;
 import app.goodbuy.core.favorites.dto.FavoriteDTO;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
@@ -13,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +27,8 @@ import java.util.UUID;
 public class FavoriteController {
 
     private static final Logger log = LoggerFactory.getLogger(FavoriteController.class);
+
+    private static final String AUTH_USER_ATTR = "goodbuyUser";
 
     private final FavoriteRepository favoriteRepository;
     private final FavoriteService favoriteService;
@@ -37,25 +42,16 @@ public class FavoriteController {
     }
 
     // ─────────────────────────────────────
-    // GET: list favorites
+    // GET: list favorites (auth via X-Session-Token)
     // ─────────────────────────────────────
 
     @GetMapping
-    public ResponseEntity<List<FavoriteDTO>> listFavorites(
-            @RequestParam("userId") @NotBlank String userIdRaw
-    ) {
-        UUID userId;
-        try {
-            userId = UUID.fromString(userIdRaw);
-        } catch (IllegalArgumentException ex) {
-            log.warn("FavoriteController.listFavorites called with invalid userId='{}'", userIdRaw);
-            return ResponseEntity.badRequest().build();
-        }
+    public ResponseEntity<List<FavoriteDTO>> listFavorites(HttpServletRequest request) {
+        UUID userId = requireAuthenticatedUserId(request);
 
         List<FavoriteEntity> entities = favoriteRepository.findByUserIdOrderBySavedAtDesc(userId);
 
         if (entities.isEmpty()) {
-            // 204 → iOS treats as "no favorites yet"
             return ResponseEntity.noContent().build();
         }
 
@@ -67,82 +63,68 @@ public class FavoriteController {
     }
 
     // ─────────────────────────────────────
-    // GET: exists
+    // GET: exists (auth via X-Session-Token)
     // ─────────────────────────────────────
     //
-    // GET /api/v1/favorites/exists?userId=...&ean=...
+    // GET /api/v1/favorites/exists?ean=...
     //
     // 200 → favorite exists
     // 404 → not a favorite
-    // 400 → bad userId
 
     @GetMapping("/exists")
     public ResponseEntity<Void> exists(
-            @RequestParam("userId") @NotBlank String userIdRaw,
-            @RequestParam("ean") @NotBlank String ean
+            @RequestParam("ean") @NotBlank String ean,
+            HttpServletRequest request
     ) {
-        UUID userId;
-        try {
-            userId = UUID.fromString(userIdRaw);
-        } catch (IllegalArgumentException ex) {
-            log.warn("FavoriteController.exists invalid userId='{}'", userIdRaw);
-            return ResponseEntity.badRequest().build();
-        }
+        UUID userId = requireAuthenticatedUserId(request);
 
         boolean exists = favoriteRepository.existsByUserIdAndEan(userId, ean);
         return exists ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
     }
 
     // ─────────────────────────────────────
-    // POST: save a favorite
+    // POST: save a favorite (auth via X-Session-Token)
     // ─────────────────────────────────────
     //
-    // iOS sends:
-    //  POST /api/v1/favorites
-    //  {
-    //    "userId": "9630-...-4500",
-    //    "ean": "00817939000052",
-    //    "productName": "Method All-Purpose Cleaner ...",
-    //    "brand": "Method",
-    //    "ratingLetter": "B",
-    //    "safetyScore": 3.5
-    //  }
+    // POST /api/v1/favorites
+    // {
+    //   "ean": "...",
+    //   "productName": "...",
+    //   "brand": "...",
+    //   "ratingLetter": "B",
+    //   "safetyScore": 3.5
+    // }
     //
     // If it already exists → 200 OK with existing DTO.
     // If new → 201 Created with new DTO.
 
     @PostMapping
     public ResponseEntity<FavoriteDTO> saveFavorite(
-            @Valid @RequestBody SaveFavoriteRequest request
+            @Valid @RequestBody SaveFavoriteRequest requestBody,
+            HttpServletRequest request
     ) {
-        UUID userId;
-        try {
-            userId = UUID.fromString(request.userId());
-        } catch (IllegalArgumentException ex) {
-            log.warn("FavoriteController.saveFavorite invalid userId='{}'", request.userId());
-            return ResponseEntity.badRequest().build();
-        }
+        UUID userId = requireAuthenticatedUserId(request);
 
-        // Idempotent on (userId, ean)
+        String ean = requestBody.ean().trim();
+
         Optional<FavoriteEntity> existing =
-                favoriteRepository.findByUserIdAndEan(userId, request.ean());
+                favoriteRepository.findByUserIdAndEan(userId, ean);
 
         if (existing.isPresent()) {
             FavoriteEntity entity = existing.get();
-            // Optionally update snapshot fields
-            entity.setProductName(request.productName());
-            entity.setBrand(request.brand());
-            entity.setRatingLetter(request.ratingLetter());
-            entity.setSafetyScore(request.safetyScore());
+            entity.setProductName(requestBody.productName());
+            entity.setBrand(requestBody.brand());
+            entity.setRatingLetter(requestBody.ratingLetter());
+            entity.setSafetyScore(requestBody.safetyScore());
             FavoriteEntity saved = favoriteRepository.save(entity);
             return ResponseEntity.ok(FavoriteMapper.toDTO(saved));
         }
 
-        FavoriteEntity entity = new FavoriteEntity(userId, request.ean());
-        entity.setProductName(request.productName());
-        entity.setBrand(request.brand());
-        entity.setRatingLetter(request.ratingLetter());
-        entity.setSafetyScore(request.safetyScore());
+        FavoriteEntity entity = new FavoriteEntity(userId, ean);
+        entity.setProductName(requestBody.productName());
+        entity.setBrand(requestBody.brand());
+        entity.setRatingLetter(requestBody.ratingLetter());
+        entity.setSafetyScore(requestBody.safetyScore());
 
         FavoriteEntity saved = favoriteRepository.save(entity);
 
@@ -152,29 +134,34 @@ public class FavoriteController {
     }
 
     // ─────────────────────────────────────
-    // DELETE: remove a favorite
+    // DELETE: remove a favorite (auth via X-Session-Token)
     // ─────────────────────────────────────
     //
-    // DELETE /api/v1/favorites?userId=...&ean=...
+    // DELETE /api/v1/favorites?ean=...
     //
     // 204 → deleted (or already gone, we treat as success)
-    // 400 → bad userId
 
     @DeleteMapping
     public ResponseEntity<Void> deleteFavorite(
-            @RequestParam("userId") @NotBlank String userIdRaw,
-            @RequestParam("ean") @NotBlank String ean
+            @RequestParam("ean") @NotBlank String ean,
+            HttpServletRequest request
     ) {
-        UUID userId;
-        try {
-            userId = UUID.fromString(userIdRaw);
-        } catch (IllegalArgumentException ex) {
-            log.warn("FavoriteController.deleteFavorite invalid userId='{}'", userIdRaw);
-            return ResponseEntity.badRequest().build();
-        }
+        UUID userId = requireAuthenticatedUserId(request);
 
-        favoriteService.deleteFavorite(userId, ean);
+        favoriteService.deleteFavorite(userId, ean.trim());
         return ResponseEntity.noContent().build();
+    }
+
+    // ─────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────
+
+    private static UUID requireAuthenticatedUserId(HttpServletRequest request) {
+        Object obj = request.getAttribute(AUTH_USER_ATTR);
+        if (obj instanceof AppUserEntity user) {
+            return user.getId();
+        }
+        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Valid session token is required");
     }
 
     // ─────────────────────────────────────
@@ -182,7 +169,6 @@ public class FavoriteController {
     // ─────────────────────────────────────
 
     public record SaveFavoriteRequest(
-            @NotBlank String userId,
             @NotBlank String ean,
             String productName,
             String brand,

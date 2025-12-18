@@ -136,7 +136,9 @@ public class EanSearchClient implements ExternalCatalogClient {
                     titles,
                     manufacturer,
                     "EAN-SEARCH",
-                    "unknown"   // domain; will be classified later by our own logic
+                    "unknown",   // domain; will be classified later by our own logic
+                    null,        // safetyScore: external source has no GoodBuy score
+                    null         // ratingLetter: external source has no GoodBuy grade
             );
 
             log.debug("EAN-Search hit ean={} name={} brand={}", ean, safe(name), safe(brand));
