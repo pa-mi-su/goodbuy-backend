@@ -2,164 +2,252 @@ package app.goodbuy.adapters.core.users.service;
 
 import app.goodbuy.adapters.core.users.model.AppUserEntity;
 import app.goodbuy.adapters.core.users.repo.AppUserRepository;
+import app.goodbuy.adapters.core.history.repo.ScanHistoryRepository;
+import app.goodbuy.adapters.core.favorites.repo.FavoriteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
-import java.util.Locale;
+import java.time.ZoneOffset;
+import java.util.Optional;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
-/**
- * Service for registering / touching GoodBuy app users.
- *
- * Responsibilities:
- *  - Normalize + lightly validate email
- *  - Insert new app_user row if it does not exist
- *  - Update last_seen_at, platform, app_version on every hit
- */
 @Service
-@Transactional
 public class AppUserService {
 
     private static final Logger log = LoggerFactory.getLogger(AppUserService.class);
 
-    // Super-light email sanity check, NOT a full RFC validator
-    private static final Pattern EMAIL_PATTERN =
-            Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    private final AppUserRepository appUserRepository;
+    private final ScanHistoryRepository scanHistoryRepository;
+    private final FavoriteRepository favoriteRepository;
 
-    private final AppUserRepository repo;
-
-    public AppUserService(AppUserRepository repo) {
-        this.repo = repo;
+    public AppUserService(AppUserRepository appUserRepository,
+                          ScanHistoryRepository scanHistoryRepository,
+                          FavoriteRepository favoriteRepository) {
+        this.appUserRepository = appUserRepository;
+        this.scanHistoryRepository = scanHistoryRepository;
+        this.favoriteRepository = favoriteRepository;
     }
 
     /**
-     * Register a user by email or update their last_seen_at if they already exist.
+     * Register a user by email.
      *
-     * @param rawEmail   Email from the client (required, will be normalized/lowercased)
-     * @param platform   Optional platform string, e.g. "iOS"
-     * @param appVersion Optional app version, e.g. "1.0"
-     * @return The persisted AppUserEntity
+     * Behavior:
+     *  - If email is NEW  → create user and return 201.
+     *  - If email EXISTS → 409 CONFLICT with a clean message.
+     *
+     * No auto-login by email, no SQL error leaks.
      */
-    public AppUserEntity registerOrTouch(String rawEmail, String platform, String appVersion) {
-        if (rawEmail == null) {
-            throw new IllegalArgumentException("email must not be null");
+    @Transactional
+    public AppUserEntity registerOrTouch(String email, String platform, String appVersion) {
+        if (email == null || email.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "email must not be blank");
         }
 
-        String email = normalizeEmail(rawEmail);
+        String trimmedEmail = email.trim().toLowerCase();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
-        if (!isValidEmail(email)) {
-            log.warn("AppUserService.registerOrTouch called with invalid email='{}'", rawEmail);
-            throw new IllegalArgumentException("Invalid email address");
+        // Ensure AppUserRepository has: Optional<AppUserEntity> findByEmailIgnoreCase(String email);
+        Optional<AppUserEntity> existingOpt = appUserRepository.findByEmailIgnoreCase(trimmedEmail);
+
+        if (existingOpt.isPresent()) {
+            AppUserEntity existing = existingOpt.get();
+            log.info("AppUserService.registerOrTouch: email already registered for id={} email='{}'",
+                    existing.getId(), existing.getEmail());
+
+            // Do NOT auto-login or hand out the ID.
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "That email is already registered with GoodBuy."
+            );
         }
 
-        OffsetDateTime now = OffsetDateTime.now();
-
-        AppUserEntity user = repo.findByEmail(email)
-                .orElseGet(() -> {
-                    log.info("Creating new app_user for email='{}'", email);
-                    AppUserEntity u = new AppUserEntity();
-                    u.setEmail(email);
-                    u.setCreatedAt(now);
-                    return u;
-                });
-
-        // Always bump last_seen_at + latest client info
-        user.setLastSeenAt(now);
+        AppUserEntity user = new AppUserEntity();
+        user.setEmail(trimmedEmail);
         user.setPlatform(platform);
         user.setAppVersion(appVersion);
+        user.setCreatedAt(now);
+        user.setLastSeenAt(now);
 
-        AppUserEntity saved = repo.save(user);
+        log.info("AppUserService.registerOrTouch: creating new user email='{}'", trimmedEmail);
 
-        if (saved.getId() == null) {
-            log.warn("AppUserService: saved user has null id for email='{}'", email);
-        } else {
-            log.debug("AppUserService: upserted user id={} email='{}'", saved.getId(), email);
+        return appUserRepository.save(user);
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Profile helpers used by /me and /me/email
+    // ─────────────────────────────────────────────────────
+
+    /**
+     * Lookup user by ID (UUID string). If not found, THROW.
+     *
+     * For /api/v1/users/me we surface a 404 so the client
+     * can clear its local session and re-register if the backend DB
+     * has been reset or the user row is gone.
+     */
+    @Transactional
+    public AppUserEntity getOrCreateById(String userId) {
+        if (userId == null || userId.isBlank()) {
+            // Bad client input → 400
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId must not be blank");
         }
 
-        return saved;
+        final UUID uuid;
+        try {
+            uuid = UUID.fromString(userId.trim());
+        } catch (IllegalArgumentException ex) {
+            // Malformed UUID → 400
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid userId format");
+        }
+
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+        AppUserEntity user = appUserRepository.findById(uuid)
+                .orElseThrow(() -> {
+                    log.warn("getOrCreateById: user not found for id={}", userId);
+                    // Missing row → 404 so client can reset session
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
+                });
+
+        user.setLastSeenAt(now);
+        return appUserRepository.save(user);
     }
 
     /**
-     * Ensure a user exists with the given UUID id.
+     * Update the user's email address.
      *
-     * Used when the mobile app only knows a UUID userId (no email yet),
-     * e.g. for scan history.
-     *
-     * Rules:
-     *  - If user exists → update last_seen_at (+ platform/appVersion if provided).
-     *  - If not → create a new app_user with:
-     *        id = userId
-     *        email = synthetic placeholder (non-null, unique-ish)
+     * Behavior:
+     *   - 400 if inputs are bad
+     *   - 400 if userId format is invalid
+     *   - 404 if user not found
+     *   - 409 if another user already uses that email
+     *   - No SQL leaks to the client
      */
+    @Transactional
+    public AppUserEntity updateEmail(String userId, String newEmail) {
+        if (userId == null || userId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId must not be blank");
+        }
+        if (newEmail == null || newEmail.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "email must not be blank");
+        }
+
+        final UUID uuid;
+        try {
+            uuid = UUID.fromString(userId.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid userId format");
+        }
+
+        AppUserEntity user = appUserRepository.findById(uuid)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "User not found"
+                ));
+
+        String trimmedEmail = newEmail.trim().toLowerCase();
+
+        // If they submit the same email (ignoring case), treat as no-op.
+        if (trimmedEmail.equalsIgnoreCase(user.getEmail())) {
+            log.info("AppUserService.updateEmail: no-op (same email) for user id={}", userId);
+            user.setLastSeenAt(OffsetDateTime.now(ZoneOffset.UTC));
+            return appUserRepository.save(user);
+        }
+
+        // Check if another user already owns this email.
+        appUserRepository.findByEmailIgnoreCase(trimmedEmail).ifPresent(existing -> {
+            if (!existing.getId().equals(user.getId())) {
+                log.info("AppUserService.updateEmail: email '{}' already in use by id={}",
+                        trimmedEmail, existing.getId());
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "That email is already in use."
+                );
+            }
+        });
+
+        user.setEmail(trimmedEmail);
+        user.setLastSeenAt(OffsetDateTime.now(ZoneOffset.UTC));
+
+        log.info("AppUserService.updateEmail: updated email for user id={} email='{}'",
+                user.getId(), trimmedEmail);
+
+        return appUserRepository.save(user);
+    }
+
+    /**
+     * Total scans for this user (for profile metrics).
+     *
+     * Uses ScanHistoryRepository.countByUserId.
+     */
+    @Transactional(readOnly = true)
+    public long countScansForUser(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return 0L;
+        }
+        try {
+            UUID uuid = UUID.fromString(userId.trim());
+            return scanHistoryRepository.countByUserId(uuid);
+        } catch (IllegalArgumentException ex) {
+            // bad UUID format → treat as 0 scans instead of blowing up profile screen
+            log.warn("countScansForUser: invalid userId='{}'", userId);
+            return 0L;
+        }
+    }
+
+    /**
+     * Total favorites for this user (for profile metrics).
+     *
+     * Uses FavoriteRepository.countByUserId.
+     */
+    @Transactional(readOnly = true)
+    public long countFavoritesForUser(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return 0L;
+        }
+        try {
+            UUID uuid = UUID.fromString(userId.trim());
+            return favoriteRepository.countByUserId(uuid);
+        } catch (IllegalArgumentException ex) {
+            log.warn("countFavoritesForUser: invalid userId='{}'", userId);
+            return 0L;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────
+    // Legacy helper used by HistoryController
+    // ─────────────────────────────────────────────────────
+
+    /**
+     * Legacy-style helper for code that already calls ensureUserExistsById(UUID, platform, appVersion).
+     *
+     * NOW: if the user exists, updates lastSeenAt and optionally platform/appVersion.
+     *      if not, THROWS (we do NOT create placeholder users without email anymore).
+     */
+    @Transactional
     public AppUserEntity ensureUserExistsById(UUID userId, String platform, String appVersion) {
         if (userId == null) {
             throw new IllegalArgumentException("userId must not be null");
         }
 
-        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
-        return repo.findById(userId)
-                .map(existing -> {
-                    existing.setLastSeenAt(now);
-                    if (platform != null) {
-                        existing.setPlatform(platform);
-                    }
-                    if (appVersion != null) {
-                        existing.setAppVersion(appVersion);
-                    }
-                    log.debug("AppUserService.ensureUserExistsById: touched existing user id={}", existing.getId());
-                    // Entity is managed; will be flushed at tx commit
-                    return existing;
-                })
-                .orElseGet(() -> {
-                    String syntheticEmail = buildSyntheticEmail(userId);
-                    log.info("AppUserService.ensureUserExistsById: creating new app_user id={} email='{}' (synthetic)",
-                            userId, syntheticEmail);
+        AppUserEntity user = appUserRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found for id=" + userId));
 
-                    AppUserEntity u = new AppUserEntity();
-                    // IMPORTANT: we bind this exact UUID so FK from scan_history matches
-                    u.setId(userId);
-                    u.setEmail(syntheticEmail);
-                    u.setCreatedAt(now);
-                    u.setLastSeenAt(now);
-                    u.setPlatform(platform);
-                    u.setAppVersion(appVersion);
+        if (platform != null && !platform.isBlank()) {
+            user.setPlatform(platform);
+        }
+        if (appVersion != null && !appVersion.isBlank()) {
+            user.setAppVersion(appVersion);
+        }
+        user.setLastSeenAt(now);
 
-                    AppUserEntity saved = repo.save(u);
-                    log.debug("AppUserService.ensureUserExistsById: saved new user id={} email='{}'",
-                            saved.getId(), saved.getEmail());
-                    return saved;
-                });
-    }
-
-    // ─────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────
-
-    private String normalizeEmail(String raw) {
-        String trimmed = raw.trim();
-        // citext in Postgres is case-insensitive, but we still normalize to lower
-        return trimmed.toLowerCase(Locale.ROOT);
-    }
-
-    private boolean isValidEmail(String email) {
-        return EMAIL_PATTERN.matcher(email).matches();
-    }
-
-    /**
-     * Build a synthetic but valid email for UUID-based users.
-     *
-     * Must:
-     *  - be non-null
-     *  - match EMAIL_PATTERN
-     *  - be unique-ish per UUID
-     */
-    private String buildSyntheticEmail(UUID userId) {
-        // Example: uid-7ca5...@anon.goodbuy.app
-        return "uid-" + userId.toString() + "@anon.goodbuy.app";
+        log.info("AppUserService.ensureUserExistsById: touched existing user id={}", user.getId());
+        return appUserRepository.save(user);
     }
 }

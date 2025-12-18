@@ -181,7 +181,9 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
                     titles,
                     manufacturer,
                     "EAN-DB",
-                    "unknown"   // domain: will be classified later in our own pipeline
+                    "unknown",   // domain: will be classified later in our own pipeline
+                    null,        // safetyScore: external catalog has no GoodBuy score
+                    null         // ratingLetter: external catalog has no GoodBuy grade
             );
 
             log.debug(

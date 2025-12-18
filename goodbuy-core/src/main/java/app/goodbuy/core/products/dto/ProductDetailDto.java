@@ -1,5 +1,6 @@
 package app.goodbuy.core.products.dto;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
@@ -13,8 +14,10 @@ public record ProductDetailDto(
         List<IngredientDto> ingredients,
         Map<String, String> titles,          // e.g., { "en": "Name", "fr": "Nom" }
         Map<String, String> manufacturer,    // e.g., { "id": "mrs-meyer-s-s-c-johnson", "en": "Mrs Meyer's" }
-        String source,                       // "EAN-DB", etc.
-        String domain                        // "cleaning", "baby", "food", "unknown"
+        String source,                       // "EAN-DB", "GOODBUY-DB", "EAN-SEARCH", etc.
+        String domain,                       // "cleaning", "baby", "food", "unknown"
+        BigDecimal safetyScore,              // ✅ product-level safety score from our DB
+        String ratingLetter                  // ✅ product-level rating letter (A–F, "NR")
 ) {
     public record ImageDto(
             String url,
