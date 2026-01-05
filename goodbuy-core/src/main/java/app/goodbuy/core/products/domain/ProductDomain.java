@@ -3,10 +3,11 @@ package app.goodbuy.core.products.domain;
 /**
  * High-level domains GoodBuy cares about.
  *
- * CLEANING is the only "supported" domain for MVP.
+ * VITAMINS is the only "supported" domain for MVP (new direction).
  * Others are here so we can progressively turn them on later.
  *
  * We keep a stable string code for persistence / JSON:
+ *   - VITAMINS  -> "vitamins"
  *   - CLEANING  -> "cleaning"
  *   - BABY      -> "baby"
  *   - FOOD      -> "food"
@@ -15,6 +16,7 @@ package app.goodbuy.core.products.domain;
  */
 public enum ProductDomain {
 
+    VITAMINS("vitamins"),
     CLEANING("cleaning"),
     BABY("baby"),
     FOOD("food"),
@@ -43,11 +45,19 @@ public enum ProductDomain {
         return UNKNOWN;
     }
 
+    public boolean isVitamins() {
+        return this == VITAMINS;
+    }
+
     public boolean isCleaning() {
         return this == CLEANING;
     }
 
+    /**
+     * "Rateable" means "eligible for GoodBuy scoring".
+     * For MVP we only rate vitamins.
+     */
     public boolean isRateableAnyDomain() {
-        return this == CLEANING || this == BABY || this == FOOD;
+        return this == VITAMINS;
     }
 }
