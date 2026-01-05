@@ -1,16 +1,18 @@
 package app.goodbuy.auth.magiclink;
 
 import app.goodbuy.adapters.core.sessions.service.SessionService;
-import app.goodbuy.adapters.core.users.model.AppUserEntity;
-import app.goodbuy.adapters.core.users.service.MagicLinkService;
+import app.goodbuy.core.auth.magiclink.MagicLinkSession;
+import app.goodbuy.core.auth.magiclink.port.MagicLinkPort;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/v1/auth/magic-link")
@@ -19,12 +21,12 @@ public class MagicLinkAuthController {
 
     private static final Logger log = LoggerFactory.getLogger(MagicLinkAuthController.class);
 
-    private final MagicLinkService magicLinkService;
+    private final MagicLinkPort magicLinkPort;
     private final SessionService sessionService;
 
-    public MagicLinkAuthController(MagicLinkService magicLinkService,
+    public MagicLinkAuthController(MagicLinkPort magicLinkPort,
                                    SessionService sessionService) {
-        this.magicLinkService = magicLinkService;
+        this.magicLinkPort = magicLinkPort;
         this.sessionService = sessionService;
     }
 
@@ -39,7 +41,8 @@ public class MagicLinkAuthController {
         log.info("MagicLinkAuthController.requestMagicLink email='{}' platform='{}' appVersion='{}' ip={}",
                 body.email(), body.platform(), body.appVersion(), ip);
 
-        magicLinkService.createLoginTokenForEmail(body.email(), ip, ua);
+        // MUST NOT leak whether user exists (port enforces that contract)
+        magicLinkPort.requestMagicLink(body.email(), body.platform(), body.appVersion(), ip, ua);
 
         return ResponseEntity.ok(new MagicLinkRequestResponse("ok"));
     }
@@ -54,19 +57,28 @@ public class MagicLinkAuthController {
 
         log.info("MagicLinkAuthController.consumeMagicLink token='{}' ip={}", body.token(), ip);
 
-        // 1) Consume magic link (mark used, validate expiry, update lastSeen, etc.)
-        AppUserEntity user = magicLinkService.validateAndConsumeToken(body.token(), ip, ua);
+        MagicLinkSession session = magicLinkPort
+                .consumeMagicLink(body.token(), body.platform(), body.appVersion(), ip, ua)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.GONE,
+                        "Magic login link has expired. Please request a new one."
+                ));
 
-        // 2) Create a REAL session token (stored in user_session)
-        String sessionToken = sessionService.createSessionTokenForUser(user, ip, ua);
+        // Create a REAL session token (stored in user_session)
+        // This keeps API from depending on adapters-core entity types.
+        String sessionToken = sessionService.createSessionTokenForUserId(
+                session.userId().toString(),
+                ip,
+                ua
+        );
 
         log.info("MagicLinkAuthController.consumeMagicLink SUCCESS userId={} email={}",
-                user.getId(), user.getEmail());
+                session.userId(), session.email());
 
         return ResponseEntity.ok(
                 new MagicLinkConsumeResponse(
-                        user.getId().toString(),
-                        user.getEmail(),
+                        session.userId().toString(),
+                        session.email(),
                         sessionToken
                 )
         );
