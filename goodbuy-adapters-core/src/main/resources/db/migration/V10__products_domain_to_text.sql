@@ -1,16 +1,22 @@
 -- V10__products_domain_to_text.sql
 -- Align products.domain with Java String field.
+-- Java expects values like: "vitamins", "cleaning", "unknown" (lowercase).
 
--- Change the domain column from enum product_domain to plain text
+-- Convert enum (or whatever it is) to text.
 ALTER TABLE products
     ALTER COLUMN domain TYPE text
     USING domain::text;
 
--- Make sure we always have a value; match what the code expects
+-- Normalize to lowercase for consistency with current Java conventions.
+UPDATE products
+SET domain = lower(domain)
+WHERE domain IS NOT NULL;
+
+-- Ensure default matches code expectations
 ALTER TABLE products
     ALTER COLUMN domain SET DEFAULT 'unknown';
 
--- (Optional but wise) Ensure there are no NULLs hanging around
+-- Ensure no NULLs / blanks
 UPDATE products
 SET domain = 'unknown'
-WHERE domain IS NULL;
+WHERE domain IS NULL OR btrim(domain) = '';
