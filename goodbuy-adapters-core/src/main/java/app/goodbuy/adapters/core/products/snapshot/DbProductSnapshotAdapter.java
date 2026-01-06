@@ -10,6 +10,7 @@ import app.goodbuy.adapters.core.products.repo.ProductRepository;
 import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.port.ProductDomainConfigPort;
 import app.goodbuy.core.products.port.ProductDomainResolverPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
 import app.goodbuy.core.storage.ProductImageStoragePort;
@@ -42,6 +43,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final IngredientRepository ingredientRepo;
     private final ProductImageStoragePort imageStorage;
     private final ProductDomainResolverPort domainResolver;
+    private final ProductDomainConfigPort domainConfig;
     private final ProductScoringAdapterService productScoringAdapter;
     private final MissingIngredientReportService missingIngredientReportService;
 
@@ -56,6 +58,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             IngredientRepository ingredientRepo,
             ProductImageStoragePort imageStorage,
             ProductDomainResolverPort domainResolver,
+            ProductDomainConfigPort domainConfig,
             ProductScoringAdapterService productScoringAdapter,
             MissingIngredientReportService missingIngredientReportService
     ) {
@@ -64,6 +67,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         this.ingredientRepo = ingredientRepo;
         this.imageStorage = imageStorage;
         this.domainResolver = domainResolver;
+        this.domainConfig = domainConfig;
         this.productScoringAdapter = productScoringAdapter;
         this.missingIngredientReportService = missingIngredientReportService;
     }
@@ -86,7 +90,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         log.info("saveSnapshot: BEGIN gtin={} name='{}' brand='{}'",
                 ean14, safe(dto.name()), safe(dto.brand()));
 
-        // ───────────────── PRODUCT UPSERT ─────────────────
         ProductEntity product = productRepo.findByEan(ean14)
                 .orElseGet(ProductEntity::new);
 
@@ -110,10 +113,14 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 product.getBrand()
         );
 
-        String domainStr = domainEnum.name().toLowerCase(Locale.ROOT);
-        product.setDomain(domainStr);
+        String domainCode = (domainEnum == null ? ProductDomain.UNKNOWN.code() : domainEnum.code());
+        product.setDomain(domainCode);
 
-        log.info("saveSnapshot: classified domain={} for gtin={}", domainStr, ean14);
+        boolean enabled = domainConfig.isEnabled(domainCode);
+        boolean rated = domainConfig.isRated(domainCode);
+
+        log.info("saveSnapshot: classified domain={} enabled={} rated={} gtin={}",
+                domainCode, enabled, rated, ean14);
 
         // ───────────── IMAGE SELECTION + S3 MIRROR ─────────────
         List<ProductDetailDto.ImageDto> images = dto.images();
@@ -133,15 +140,11 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 safe(primaryExternalUrl), ean14);
         product.setPrimaryImageUrl(primaryExternalUrl);
 
-        // Optional S3 mirror for primary image (best effort, non-fatal)
         if (primaryExternalUrl != null && !primaryExternalUrl.isBlank()) {
             try {
-                log.info("saveSnapshot: starting S3 mirror for gtin={} url={}",
-                        ean14, primaryExternalUrl);
-
+                log.info("saveSnapshot: starting S3 mirror for gtin={} url={}", ean14, primaryExternalUrl);
                 String s3Url = mirrorExternalImageToS3(ean14, primaryExternalUrl.trim());
                 product.setPrimaryImageS3Url(s3Url);
-
                 log.info("saveSnapshot: S3 upload COMPLETE gtin={} s3Url={}", ean14, s3Url);
             } catch (Exception ex) {
                 log.warn("saveSnapshot: S3 upload FAILED for gtin={} url={} err={}",
@@ -151,28 +154,23 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             log.info("saveSnapshot: NO external image URL for gtin={} — skipping S3 upload", ean14);
         }
 
-        // ───────────── SAVE PRODUCT (so it has an ID) ─────────────
         product = productRepo.save(product);
-        log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) domain={} s3Url={}",
-                product.getId(), product.getEan(), isNew, product.getDomain(), safe(product.getPrimaryImageS3Url()));
+        log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) domain={} enabled={} rated={} s3Url={}",
+                product.getId(), product.getEan(), isNew, product.getDomain(), enabled, rated, safe(product.getPrimaryImageS3Url()));
 
-        // ✅ BUGFIX #1:
-        // If this product is NOT in a supported domain, DO NOT seed ingredients and DO NOT report missing ingredients.
-        // This prevents "unsupported domain" items from being treated like "missing ingredients."
-        if (!isSupportedDomain(domainEnum)) {
-            log.info("saveSnapshot: domain={} is not supported for ingredient seeding. Skipping ingredients + scoring. gtin={}",
-                    domainEnum.name(), ean14);
+        // ✅ DB-driven gate:
+        // If domain is not enabled, DO NOT seed ingredients and DO NOT report missing ingredients.
+        if (!enabled) {
+            log.info("saveSnapshot: domain={} not enabled — skipping ingredients + scoring. gtin={}", domainCode, ean14);
             return;
         }
 
-        // ───────────── INGREDIENT LINKS (SKELETON SEEDING) ─────────────
         List<ProductDetailDto.IngredientDto> dtoIngredients = dto.ingredients();
         if (dtoIngredients == null || dtoIngredients.isEmpty()) {
             log.info("saveSnapshot: no ingredients for gtin={} — DONE", ean14);
             return;
         }
 
-        // Clear ALL existing product_ingredients for this product
         if (!isNew && product.getId() != null) {
             int removed = em.createQuery("""
                     delete from ProductIngredientEntity pi
@@ -180,11 +178,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                     """)
                     .setParameter("product", product)
                     .executeUpdate();
-            log.info("saveSnapshot: cleared {} existing product_ingredients for productId={}",
-                    removed, product.getId());
+            log.info("saveSnapshot: cleared {} existing product_ingredients for productId={}", removed, product.getId());
         }
 
-        // Also clear the in-memory collection so we fully re-seed it
         product.getProductIngredients().clear();
 
         int linked = 0;
@@ -201,7 +197,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
             String canonicalKey = rawKeyCandidate.trim().toLowerCase(Locale.ROOT);
 
-            // avoid duplicates within a single snapshot
             if (!seenKeysThisSnapshot.add(canonicalKey)) {
                 continue;
             }
@@ -218,10 +213,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             link.setIngredient(ingredient);
             link.setDisplayName(displayName);
 
-            // Persist the link
             link = productIngredientRepo.save(link);
-
-            // VERY IMPORTANT: update the owning side's collection in-memory
             product.getProductIngredients().add(link);
 
             linked++;
@@ -229,11 +221,15 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         log.info("saveSnapshot: linked {} NEW ingredients → gtin={}", linked, ean14);
 
-        // Flush so scoring adapter sees fresh rows AND collection
         em.flush();
         log.debug("saveSnapshot: JPA flush complete before product scoring for gtin={}", ean14);
 
-        // ───────────── PRODUCT SCORE (PERSISTED) ─────────────
+        // If domain is enabled but not rated, skip scoring.
+        if (!rated) {
+            log.info("saveSnapshot: domain={} enabled but not rated — skipping product scoring. gtin={}", domainCode, ean14);
+            return;
+        }
+
         try {
             var scoreResult = productScoringAdapter.scoreProduct(product);
             log.info("saveSnapshot: product score computed gtin={} result={}", ean14, scoreResult);
@@ -242,40 +238,24 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
     }
 
-    // ✅ Define what "supported" means (MVP = CLEANING only)
-    private boolean isSupportedDomain(ProductDomain domain) {
-        if (domain == null) return false;
-        // Avoid hard dependency on enum constants beyond name()
-        return "CLEANING".equalsIgnoreCase(domain.name());
-    }
-
-    // ───────────── Ingredient resolution ─────────────
-
     private Ingredient resolveOrCreateIngredient(String canonicalKey,
                                                  String displayName,
                                                  String productEan) {
         String needle = canonicalKey;
 
-        // 1) Exact canonical_key match
         Ingredient ingredient = ingredientRepo
                 .findByCanonicalKeyIgnoreCase(canonicalKey)
                 .orElse(null);
 
-        // 2) Alias/name-based resolution via custom normalized search
         if (ingredient == null) {
             List<Ingredient> candidates = ingredientRepo.findByAllNormalized(needle);
             if (!candidates.isEmpty()) {
                 ingredient = candidates.get(0);
-                log.info(
-                        "saveSnapshot: matched ingredient via alias/name needle='{}' → id={} canonicalKey='{}'",
-                        needle,
-                        ingredient.getId(),
-                        safe(ingredient.getCanonicalKey())
-                );
+                log.info("saveSnapshot: matched ingredient via alias/name needle='{}' → id={} canonicalKey='{}'",
+                        needle, ingredient.getId(), safe(ingredient.getCanonicalKey()));
             }
         }
 
-        // 3) Skeleton ingredient
         if (ingredient == null) {
             Ingredient created = new Ingredient();
             created.setCanonicalKey(canonicalKey);
@@ -283,22 +263,18 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             created.setActive(true);
 
             ingredient = ingredientRepo.save(created);
-            log.info(
-                    "saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
-                    ingredient.getId(), canonicalKey, safe(displayName)
-            );
+            log.info("saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
+                    ingredient.getId(), canonicalKey, safe(displayName));
 
-            // 🔔 Auto-report missing ingredient ONCE per (ingredient, product)
             try {
                 missingIngredientReportService.reportWithStatus(
-                        displayName,                 // ingredient_name
-                        productEan,                  // product_ean
-                        "backend-ingestion",         // app_version (synthetic)
-                        "backend",                   // platform
+                        displayName,
+                        productEan,
+                        "backend-ingestion",
+                        "backend",
                         "Skeleton ingredient auto-created from external catalog (canonicalKey=" + canonicalKey + ")"
                 );
             } catch (Exception ex) {
-                // Never break ingestion because reporting fails
                 log.warn("Failed to record missing ingredient report for '{}' (ean={}): {}",
                         displayName, productEan, ex.getMessage(), ex);
             }
@@ -306,8 +282,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         return ingredient;
     }
-
-    // ───────────── S3 MIRRORING ─────────────
 
     private String mirrorExternalImageToS3(String ean14, String externalUrl) throws Exception {
         log.info("mirrorExternalImageToS3: BEGIN gtin={} url={}", ean14, externalUrl);
@@ -344,8 +318,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         log.info("mirrorExternalImageToS3: COMPLETE → s3Url={}", s3Url);
         return s3Url;
     }
-
-    // ───────────── HELPERS ─────────────
 
     private static String normalizeToGtin14(String raw) {
         if (raw == null) return null;

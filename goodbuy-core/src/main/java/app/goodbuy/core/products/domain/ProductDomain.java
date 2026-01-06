@@ -1,20 +1,19 @@
 package app.goodbuy.core.products.domain;
 
+import java.util.Locale;
+
 /**
  * High-level domains GoodBuy cares about.
  *
- * CLEANING is the only "supported" domain for MVP.
- * Others are here so we can progressively turn them on later.
+ * IMPORTANT:
+ * Support/rating is NOT hard-coded here.
+ * It is DB-driven via product_domain_config.
  *
- * We keep a stable string code for persistence / JSON:
- *   - CLEANING  -> "cleaning"
- *   - BABY      -> "baby"
- *   - FOOD      -> "food"
- *   - OTHER     -> "other"
- *   - UNKNOWN   -> "unknown"
+ * This enum only provides stable string codes for persistence/DTOs.
  */
 public enum ProductDomain {
 
+    VITAMINS("vitamins"),
     CLEANING("cleaning"),
     BABY("baby"),
     FOOD("food"),
@@ -36,18 +35,10 @@ public enum ProductDomain {
     public static ProductDomain fromCode(String raw) {
         if (raw == null || raw.isBlank()) return UNKNOWN;
 
-        String normalized = raw.trim().toLowerCase();
+        String normalized = raw.trim().toLowerCase(Locale.ROOT);
         for (ProductDomain d : values()) {
             if (d.code.equals(normalized)) return d;
         }
         return UNKNOWN;
-    }
-
-    public boolean isCleaning() {
-        return this == CLEANING;
-    }
-
-    public boolean isRateableAnyDomain() {
-        return this == CLEANING || this == BABY || this == FOOD;
     }
 }
