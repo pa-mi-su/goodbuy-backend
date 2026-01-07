@@ -1,3 +1,4 @@
+// DbProductSnapshotAdapter.java
 package app.goodbuy.adapters.core.products.snapshot;
 
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
@@ -192,11 +193,26 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             String displayName = firstNonBlank(ing.original(), ing.canonical(), ing.id());
             if (displayName == null) continue;
 
+            // ✅ Skip label headers / qualifiers masquerading as ingredients
+            if (isNonIngredientToken(displayName)) {
+                log.info("saveSnapshot: skipping non-ingredient token displayName='{}' gtin={}",
+                        safe(displayName), ean14);
+                continue;
+            }
+
             String rawKeyCandidate = firstNonBlank(ing.canonical(), ing.original(), ing.id());
             if (rawKeyCandidate == null) continue;
 
-            String canonicalKey = rawKeyCandidate.trim().toLowerCase(Locale.ROOT);
+            if (isNonIngredientToken(rawKeyCandidate)) {
+                log.info("saveSnapshot: skipping non-ingredient token canonicalCandidate='{}' gtin={}",
+                        safe(rawKeyCandidate), ean14);
+                continue;
+            }
 
+            // Normalize canonical key for storage/lookup
+            String canonicalKey = normalizeCanonicalKey(rawKeyCandidate);
+
+            // Dedupe per snapshot by normalized canonical key
             if (!seenKeysThisSnapshot.add(canonicalKey)) {
                 continue;
             }
@@ -241,6 +257,14 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private Ingredient resolveOrCreateIngredient(String canonicalKey,
                                                  String displayName,
                                                  String productEan) {
+
+        // ✅ Absolute guard: never create/link/report non-ingredient tokens
+        if (isNonIngredientToken(canonicalKey) || isNonIngredientToken(displayName)) {
+            log.info("resolveOrCreateIngredient: skipping non-ingredient token canonicalKey='{}' displayName='{}' ean={}",
+                    safe(canonicalKey), safe(displayName), productEan);
+            return null;
+        }
+
         String needle = canonicalKey;
 
         Ingredient ingredient = ingredientRepo
@@ -329,6 +353,57 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             case 12 -> "00" + digits;
             default -> null;
         };
+    }
+
+    /**
+     * Canonical key normalization:
+     * - trim
+     * - lowercase
+     * - collapse internal whitespace
+     */
+    private static String normalizeCanonicalKey(String raw) {
+        String x = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
+        x = x.replaceAll("\\s+", " ");
+        return x;
+    }
+
+    /**
+     * Returns true when a string is very likely a label header/qualifier
+     * and not a real ingredient identity.
+     *
+     * IMPORTANT: conservative rules to avoid dropping legitimate ingredients.
+     */
+    private static boolean isNonIngredientToken(String s) {
+        if (s == null) return true;
+
+        String x = s.trim();
+        if (x.isBlank()) return true;
+
+        String lower = x.toLowerCase(Locale.ROOT);
+
+        // punctuation-only / delimiter junk
+        if (lower.matches("^[\\p{Punct}\\s]+$")) return true;
+
+        // common label headers / qualifiers
+        if (lower.endsWith(":")) return true;
+
+        // “Less than …%” style headers (the bug you hit)
+        if (lower.contains("less than") && lower.contains("%")) return true;
+        if (lower.contains("contains") && lower.contains("less than")) return true;
+
+        // “2% or less” style headers
+        if (lower.matches(".*\\b\\d+\\s*%\\s*(or\\s*less|and\\s*under)\\b.*")) return true;
+
+        // “< 2%” style headers
+        if (lower.matches(".*<\\s*\\d+\\s*%.*")) return true;
+
+        // other common non-ingredient section headers
+        if (lower.startsWith("other ingredients")) return true;
+        if (lower.startsWith("inactive ingredients")) return true;
+        if (lower.startsWith("active ingredients")) return true;
+        if (lower.startsWith("contains:")) return true;
+
+        return false;
     }
 
     private static String firstNonBlank(String... vals) {
