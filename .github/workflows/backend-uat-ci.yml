@@ -87,9 +87,16 @@ jobs:
       - name: Zip Dockerrun for EB
         run: zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
 
-      # Fail fast: prove we're using an existing bucket (prevents mystery CreateBucket behavior)
-      - name: Verify EB S3 bucket exists
-        run: aws s3api head-bucket --bucket "${{ secrets.EB_S3_BUCKET }}"
+      # Fail fast: prove the secret exists AND the bucket exists
+      - name: Debug EB_S3_BUCKET presence (masked)
+        run: |
+          if [ -z "${{ secrets.EB_S3_BUCKET }}" ]; then
+            echo "ERROR: EB_S3_BUCKET secret is EMPTY or not defined"
+            exit 1
+          else
+            echo "EB_S3_BUCKET is set"
+          fi
+
 
       # 6) Deploy to Elastic Beanstalk via dedicated action (clean)
       - name: Deploy to Elastic Beanstalk (uat)
@@ -102,4 +109,6 @@ jobs:
           environment_name: ${{ secrets.EB_ENV_NAME_UAT }}
           version_label: uat-${{ github.sha }}
           deployment_package: goodbuy-backend-uat.zip
-          bucket_name: ${{ secrets.EB_S3_BUCKET }}
+          existing_bucket_name: ${{ secrets.EB_S3_BUCKET }}
+          wait_for_deployment: true
+          wait_for_environment_recovery: 30
