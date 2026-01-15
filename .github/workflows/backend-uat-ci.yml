@@ -81,8 +81,15 @@ jobs:
           '}\n' \
           "${IMAGE_URI}" > Dockerrun.aws.json
 
+      - name: Show Dockerrun.aws.json
+        run: cat Dockerrun.aws.json
+
       - name: Zip Dockerrun for EB
         run: zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
+
+      # Fail fast: prove we're using an existing bucket (prevents mystery CreateBucket behavior)
+      - name: Verify EB S3 bucket exists
+        run: aws s3api head-bucket --bucket "${{ secrets.EB_S3_BUCKET }}"
 
       # 6) Deploy to Elastic Beanstalk via dedicated action (clean)
       - name: Deploy to Elastic Beanstalk (uat)
@@ -95,4 +102,4 @@ jobs:
           environment_name: ${{ secrets.EB_ENV_NAME_UAT }}
           version_label: uat-${{ github.sha }}
           deployment_package: goodbuy-backend-uat.zip
-          existing_bucket_name: ${{ secrets.EB_S3_BUCKET }}
+          bucket_name: ${{ secrets.EB_S3_BUCKET }}
