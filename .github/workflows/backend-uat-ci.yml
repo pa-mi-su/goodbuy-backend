@@ -34,9 +34,9 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -45,8 +45,8 @@ jobs:
       - name: Build and push Docker image (uat)
         env:
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_REGION:     ${{ secrets.AWS_REGION }}
-          ECR_REPO:       ${{ secrets.ECR_REPO }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPO: ${{ secrets.ECR_REPO }}
         run: |
           IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
           echo "Building and pushing ${IMAGE_URI}"
@@ -62,8 +62,8 @@ jobs:
       - name: Create Dockerrun.aws.json (exact known-good format)
         env:
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_REGION:     ${{ secrets.AWS_REGION }}
-          ECR_REPO:       ${{ secrets.ECR_REPO }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPO: ${{ secrets.ECR_REPO }}
         run: |
           IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
 
@@ -82,7 +82,6 @@ jobs:
   }
   EOF
 
-# Optional: helpful when debugging in Actions logs
 - name: Show Dockerrun.aws.json
   run: cat Dockerrun.aws.json
 
@@ -92,10 +91,10 @@ jobs:
 # 6) Upload version to S3 + tell EB to deploy it
 - name: Deploy to Elastic Beanstalk (uat)
   env:
-    EB_APP_NAME:   ${{ secrets.EB_APP_NAME_UAT }}
-    EB_ENV_NAME:   ${{ secrets.EB_ENV_NAME_UAT }}
-    EB_S3_BUCKET:  ${{ secrets.EB_S3_BUCKET }}
-    VERSION_LABEL: "uat-${{ github.sha }}"
+    EB_APP_NAME: ${{ secrets.EB_APP_NAME_UAT }}
+    EB_ENV_NAME: ${{ secrets.EB_ENV_NAME_UAT }}
+    EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
+    VERSION_LABEL: uat-${{ github.sha }}
   run: |
     aws s3 cp goodbuy-backend-uat.zip "s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
     
