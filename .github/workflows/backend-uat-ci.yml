@@ -82,17 +82,31 @@ jobs:
       # ✅ Deploy using AWS CLI (EB uses its own service role; no S3 bucket hardening calls)
       - name: Deploy to Elastic Beanstalk (uat) via AWS CLI
         env:
-          EB_APP_NAME:  ${{ secrets.EB_APP_NAME_UAT }}
-          EB_ENV_NAME:  ${{ secrets.EB_ENV_NAME_UAT }}
+          EB_APP_NAME: ${{ secrets.EB_APP_NAME_UAT }}
+          EB_ENV_NAME: ${{ secrets.EB_ENV_NAME_UAT }}
           EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
-          VERSION_LABEL: uat-${{ github.sha }}-${{ github.run_number }}
+          # UNIQUE even on re-runs because github.run_attempt increments
+          VERSION_LABEL: uat-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
         run: |
+          set -euo pipefail
+
+          echo "VERSION_LABEL=${VERSION_LABEL}"
+
           aws s3 cp goodbuy-backend-uat.zip "s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
 
-          aws elasticbeanstalk create-application-version \
-            --application-name "${EB_APP_NAME}" \
-            --version-label "${VERSION_LABEL}" \
-            --source-bundle S3Bucket="${EB_S3_BUCKET}",S3Key="${VERSION_LABEL}.zip"
+          # If version already exists (rerun), do NOT fail the job.
+          if aws elasticbeanstalk describe-application-versions \
+              --application-name "${EB_APP_NAME}" \
+              --version-labels "${VERSION_LABEL}" \
+              --query "ApplicationVersions[0].VersionLabel" \
+              --output text | grep -q "${VERSION_LABEL}"; then
+            echo "EB version already exists, skipping create-application-version"
+          else
+            aws elasticbeanstalk create-application-version \
+              --application-name "${EB_APP_NAME}" \
+              --version-label "${VERSION_LABEL}" \
+              --source-bundle S3Bucket="${EB_S3_BUCKET}",S3Key="${VERSION_LABEL}.zip"
+          fi
 
           aws elasticbeanstalk update-environment \
             --environment-name "${EB_ENV_NAME}" \
