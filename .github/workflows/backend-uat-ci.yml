@@ -58,7 +58,7 @@ jobs:
             --push \
             .
 
-      # 5) Create Dockerrun.aws.json in the exact known-good format you use
+      # 5) Create Dockerrun.aws.json (EXACT format, no heredoc)
       - name: Create Dockerrun.aws.json (exact known-good format)
         env:
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -67,42 +67,41 @@ jobs:
         run: |
           IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
 
-          cat > Dockerrun.aws.json <<EOF
-  {
-    "AWSEBDockerrunVersion": "1",
-    "Image": {
-      "Name": "${IMAGE_URI}",
-      "Update": "true"
-    },
-    "Ports": [
-      {
-        "ContainerPort": "8080"
-      }
-    ]
-  }
-  EOF
+          printf '{\n' \
+          '  "AWSEBDockerrunVersion": "1",\n' \
+          '  "Image": {\n' \
+          '    "Name": "%s",\n' \
+          '    "Update": "true"\n' \
+          '  },\n' \
+          '  "Ports": [\n' \
+          '    {\n' \
+          '      "ContainerPort": "8080"\n' \
+          '    }\n' \
+          '  ]\n' \
+          '}\n' \
+          "${IMAGE_URI}" > Dockerrun.aws.json
 
-- name: Show Dockerrun.aws.json
-  run: cat Dockerrun.aws.json
+      - name: Show Dockerrun.aws.json
+        run: cat Dockerrun.aws.json
 
-- name: Zip Dockerrun for EB
-  run: zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
+      - name: Zip Dockerrun for EB
+        run: zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
 
-# 6) Upload version to S3 + tell EB to deploy it
-- name: Deploy to Elastic Beanstalk (uat)
-  env:
-    EB_APP_NAME: ${{ secrets.EB_APP_NAME_UAT }}
-    EB_ENV_NAME: ${{ secrets.EB_ENV_NAME_UAT }}
-    EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
-    VERSION_LABEL: uat-${{ github.sha }}
-  run: |
-    aws s3 cp goodbuy-backend-uat.zip "s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
-    
-    aws elasticbeanstalk create-application-version \
-      --application-name "${EB_APP_NAME}" \
-      --version-label "${VERSION_LABEL}" \
-      --source-bundle S3Bucket="${EB_S3_BUCKET}",S3Key="${VERSION_LABEL}.zip"
-    
-    aws elasticbeanstalk update-environment \
-      --environment-name "${EB_ENV_NAME}" \
-      --version-label "${VERSION_LABEL}"
+      # 6) Upload version to S3 + tell EB to deploy it
+      - name: Deploy to Elastic Beanstalk (uat)
+        env:
+          EB_APP_NAME: ${{ secrets.EB_APP_NAME_UAT }}
+          EB_ENV_NAME: ${{ secrets.EB_ENV_NAME_UAT }}
+          EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
+          VERSION_LABEL: uat-${{ github.sha }}
+        run: |
+          aws s3 cp goodbuy-backend-uat.zip "s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
+
+          aws elasticbeanstalk create-application-version \
+            --application-name "${EB_APP_NAME}" \
+            --version-label "${VERSION_LABEL}" \
+            --source-bundle S3Bucket="${EB_S3_BUCKET}",S3Key="${VERSION_LABEL}.zip"
+
+          aws elasticbeanstalk update-environment \
+            --environment-name "${EB_ENV_NAME}" \
+            --version-label "${VERSION_LABEL}"
