@@ -1,25 +1,109 @@
-name: Backend CI (uat)
+name: Backend Deploy (uat)
 
 on:
   push:
     branches: [ uat ]
-  pull_request:
-    branches: [ uat ]
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
+      # 1) Build + test
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
           cache: maven
 
       - name: Build & test with Maven
         run: mvn -B verify
+
+      # 2) Enable linux/amd64 builds on GitHub runner
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3) AWS auth + ECR login
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 4) Build + push the image to ECR with tag :uat (amd64)
+      - name: Build and push Docker image (uat)
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION:     ${{ secrets.AWS_REGION }}
+          ECR_REPO:       ${{ secrets.ECR_REPO }}
+        run: |
+          IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
+          echo "Building and pushing ${IMAGE_URI}"
+
+          docker buildx build \
+            --platform linux/amd64 \
+            -t "${IMAGE_URI}" \
+            -f goodbuy-api/Dockerfile \
+            --push \
+            .
+
+      # 5) Create Dockerrun.aws.json in the exact known-good format you use
+      - name: Create Dockerrun.aws.json (exact known-good format)
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION:     ${{ secrets.AWS_REGION }}
+          ECR_REPO:       ${{ secrets.ECR_REPO }}
+        run: |
+          IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
+
+          cat > Dockerrun.aws.json <<EOF
+  {
+    "AWSEBDockerrunVersion": "1",
+    "Image": {
+      "Name": "${IMAGE_URI}",
+      "Update": "true"
+    },
+    "Ports": [
+      {
+        "ContainerPort": "8080"
+      }
+    ]
+  }
+  EOF
+
+# Optional: helpful when debugging in Actions logs
+- name: Show Dockerrun.aws.json
+  run: cat Dockerrun.aws.json
+
+- name: Zip Dockerrun for EB
+  run: zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
+
+# 6) Upload version to S3 + tell EB to deploy it
+- name: Deploy to Elastic Beanstalk (uat)
+  env:
+    EB_APP_NAME:   ${{ secrets.EB_APP_NAME_UAT }}
+    EB_ENV_NAME:   ${{ secrets.EB_ENV_NAME_UAT }}
+    EB_S3_BUCKET:  ${{ secrets.EB_S3_BUCKET }}
+    VERSION_LABEL: "uat-${{ github.sha }}"
+  run: |
+    aws s3 cp goodbuy-backend-uat.zip "s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
+    
+    aws elasticbeanstalk create-application-version \
+      --application-name "${EB_APP_NAME}" \
+      --version-label "${VERSION_LABEL}" \
+      --source-bundle S3Bucket="${EB_S3_BUCKET}",S3Key="${VERSION_LABEL}.zip"
+    
+    aws elasticbeanstalk update-environment \
+      --environment-name "${EB_ENV_NAME}" \
+      --version-label "${VERSION_LABEL}"
