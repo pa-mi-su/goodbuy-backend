@@ -107,7 +107,7 @@ jobs:
           region: ${{ secrets.EB_REGION }}
           application_name: ${{ secrets.EB_APP_NAME_UAT }}
           environment_name: ${{ secrets.EB_ENV_NAME_UAT }}
-          version_label: uat-${{ github.sha }}
+          version_label: uat-${{ github.sha }}-${{ github.run_number }}
           deployment_package: goodbuy-backend-uat.zip
           existing_bucket_name: ${{ secrets.EB_S3_BUCKET }}
           wait_for_deployment: true
