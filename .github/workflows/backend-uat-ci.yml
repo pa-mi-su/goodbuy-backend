@@ -31,9 +31,9 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region:            ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
@@ -41,9 +41,11 @@ jobs:
       - name: Build and push Docker image (uat)
         env:
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          ECR_REPO: ${{ secrets.ECR_REPO }}
+          AWS_REGION:     ${{ secrets.AWS_REGION }}
+          ECR_REPO:       ${{ secrets.ECR_REPO }}
         run: |
+          set -euo pipefail
+
           IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
           echo "Building and pushing ${IMAGE_URI}"
 
@@ -57,9 +59,11 @@ jobs:
       - name: Create Dockerrun.aws.json (exact known-good format)
         env:
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          ECR_REPO: ${{ secrets.ECR_REPO }}
+          AWS_REGION:     ${{ secrets.AWS_REGION }}
+          ECR_REPO:       ${{ secrets.ECR_REPO }}
         run: |
+          set -euo pipefail
+
           IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:uat"
 
           printf '{\n' \
@@ -76,16 +80,31 @@ jobs:
           '}\n' \
           "${IMAGE_URI}" > Dockerrun.aws.json
 
+      - name: Show + validate Dockerrun.aws.json (prevents truncated JSON reaching EB)
+        run: |
+          set -euo pipefail
+          echo "---- Dockerrun.aws.json ----"
+          cat Dockerrun.aws.json
+          echo "---- JSON validation ----"
+          python -m json.tool Dockerrun.aws.json > /dev/null
+          echo "Dockerrun JSON is valid."
+          echo "Size:"
+          wc -c Dockerrun.aws.json
+
       - name: Zip Dockerrun for EB
-        run: zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
+        run: |
+          set -euo pipefail
+          rm -f goodbuy-backend-uat.zip
+          zip -r goodbuy-backend-uat.zip Dockerrun.aws.json
+          echo "---- Zip contents ----"
+          unzip -l goodbuy-backend-uat.zip
 
       # ✅ Deploy using AWS CLI (EB uses its own service role; no S3 bucket hardening calls)
       - name: Deploy to Elastic Beanstalk (uat) via AWS CLI
         env:
-          EB_APP_NAME: ${{ secrets.EB_APP_NAME_UAT }}
-          EB_ENV_NAME: ${{ secrets.EB_ENV_NAME_UAT }}
-          EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
-          # UNIQUE even on re-runs because github.run_attempt increments
+          EB_APP_NAME:   ${{ secrets.EB_APP_NAME_UAT }}
+          EB_ENV_NAME:   ${{ secrets.EB_ENV_NAME_UAT }}
+          EB_S3_BUCKET:  ${{ secrets.EB_S3_BUCKET }}
           VERSION_LABEL: uat-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
