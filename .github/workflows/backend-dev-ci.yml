@@ -46,8 +46,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          : "${AWS_ACCOUNT_ID:?missing AWS_ACCOUNT_ID secret}"
+          : "${AWS_REGION:?missing AWS_REGION secret}"
+          : "${ECR_REPO:?missing ECR_REPO secret}"
+
           IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:dev"
-          echo "Building and pushing ${IMAGE_URI}"
+          echo "IMAGE_URI=${IMAGE_URI}"
 
           docker buildx build \
             --platform linux/amd64 \
@@ -74,9 +78,7 @@ jobs:
               "Update": "true"
             },
             "Ports": [
-              {
-                "ContainerPort": "8080"
-              }
+              { "ContainerPort": "8080" }
             ]
           }
           EOF
@@ -92,7 +94,6 @@ jobs:
           echo "---- JSON validation ----"
           python -m json.tool Dockerrun.aws.json > /dev/null
           echo "Dockerrun JSON is valid."
-          echo "Size:"
           wc -c Dockerrun.aws.json
 
       - name: Zip Dockerrun for EB
@@ -100,36 +101,76 @@ jobs:
           set -euo pipefail
           rm -f goodbuy-backend-dev.zip
           zip -r goodbuy-backend-dev.zip Dockerrun.aws.json
-          echo "---- Zip contents ----"
           unzip -l goodbuy-backend-dev.zip
 
-      - name: Deploy to Elastic Beanstalk (dev) via AWS CLI
+      - name: Deploy to Elastic Beanstalk (dev) via AWS CLI (verified)
         env:
           EB_APP_NAME: ${{ secrets.EB_APP_NAME_DEV }}
           EB_ENV_NAME: ${{ secrets.EB_ENV_NAME_DEV }}
-          EB_S3_BUCKET: ${{ secrets.EB_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+          # ✅ Stop relying on a flaky secret: use the real EB bucket for your account/region.
+          EB_S3_BUCKET: elasticbeanstalk-us-east-1-160885294528
+
           VERSION_LABEL: dev-${{ github.sha }}-${{ github.run_number }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
 
-          echo "VERSION_LABEL=${VERSION_LABEL}"
-          echo "Uploading ZIP to s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
+          : "${EB_APP_NAME:?missing EB_APP_NAME_DEV secret}"
+          : "${EB_ENV_NAME:?missing EB_ENV_NAME_DEV secret}"
+          : "${AWS_REGION:?missing AWS_REGION secret}"
+          : "${EB_S3_BUCKET:?missing EB_S3_BUCKET}"
 
+          echo "EB_APP_NAME=${EB_APP_NAME}"
+          echo "EB_ENV_NAME=${EB_ENV_NAME}"
+          echo "EB_S3_BUCKET=${EB_S3_BUCKET}"
+          echo "VERSION_LABEL=${VERSION_LABEL}"
+
+          # ✅ Ensure bucket is reachable (permissions + correct name)
+          aws s3 ls "s3://${EB_S3_BUCKET}" >/dev/null
+
+          echo "Uploading ZIP to s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
           aws s3 cp goodbuy-backend-dev.zip "s3://${EB_S3_BUCKET}/${VERSION_LABEL}.zip"
 
-          if aws elasticbeanstalk describe-application-versions \
-              --application-name "${EB_APP_NAME}" \
-              --version-labels "${VERSION_LABEL}" \
-              --query "ApplicationVersions[0].VersionLabel" \
-              --output text | grep -q "${VERSION_LABEL}"; then
-            echo "EB version already exists, skipping create-application-version"
-          else
+          # ✅ Create EB application version (or skip if rerun)
+          EXISTS="$(aws elasticbeanstalk describe-application-versions \
+            --application-name "${EB_APP_NAME}" \
+            --version-labels "${VERSION_LABEL}" \
+            --query "length(ApplicationVersions)" \
+            --output text || true)"
+
+          if [ "${EXISTS}" = "0" ]; then
             aws elasticbeanstalk create-application-version \
               --application-name "${EB_APP_NAME}" \
               --version-label "${VERSION_LABEL}" \
               --source-bundle S3Bucket="${EB_S3_BUCKET}",S3Key="${VERSION_LABEL}.zip"
+          else
+            echo "EB version already exists (${VERSION_LABEL}); continuing."
+          fi
+
+          # ✅ HARD CHECK: make sure EB version actually has a SourceBundle
+          SOURCE_BUCKET="$(aws elasticbeanstalk describe-application-versions \
+            --application-name "${EB_APP_NAME}" \
+            --version-labels "${VERSION_LABEL}" \
+            --query "ApplicationVersions[0].SourceBundle.S3Bucket" \
+            --output text)"
+
+          SOURCE_KEY="$(aws elasticbeanstalk describe-application-versions \
+            --application-name "${EB_APP_NAME}" \
+            --version-labels "${VERSION_LABEL}" \
+            --query "ApplicationVersions[0].SourceBundle.S3Key" \
+            --output text)"
+
+          echo "SourceBundle bucket=${SOURCE_BUCKET} key=${SOURCE_KEY}"
+
+          if [ "${SOURCE_BUCKET}" = "None" ] || [ "${SOURCE_KEY}" = "None" ] || [ -z "${SOURCE_BUCKET}" ] || [ -z "${SOURCE_KEY}" ]; then
+            echo "ERROR: EB ApplicationVersion SourceBundle is missing (would become Source=None). Failing."
+            exit 1
           fi
 
           aws elasticbeanstalk update-environment \
             --environment-name "${EB_ENV_NAME}" \
             --version-label "${VERSION_LABEL}"
+
+          aws elasticbeanstalk wait environment-updated \
+            --environment-names "${EB_ENV_NAME}"
