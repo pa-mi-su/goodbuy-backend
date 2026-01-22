@@ -127,6 +127,9 @@ public class SessionTokenAuthFilter implements Filter {
         // CORS preflight should always pass through
         if ("OPTIONS".equalsIgnoreCase(method)) return true;
 
+        // ✅ Allow the root endpoint (/) to be public (EB / simple ping)
+        if ("/".equals(path)) return true;
+
         if (path.startsWith("/actuator")) return true;
 
         // Magic-link auth endpoints must be public

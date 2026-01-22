@@ -48,7 +48,7 @@
                   │
                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          goodbuy-api (Spring Boot)                 │
+│                          goodbuy-api (SpringBoot)                 │
 │─────────────────────────────────────────────────────────────────────│
 │ REST Controllers                                                   │
 │   • ProductController (/v1/products)                               │
