@@ -22,14 +22,31 @@ public class IngredientReadService {
     }
 
     /**
-     * Ranked single search.
+     * Ranked single search (DEFAULT behavior).
      *
      * Priority:
      *  1) exact canonical_key match (case-insensitive)
      *  2) exact alias match (case-insensitive)
      *  3) loose fallback (substring match across canonical/display/aliases)
+     *
+     * Appropriate for:
+     *  - Ingredient search UI
+     *  - Ingredient detail lookup when user is typing / exploring
      */
     public Optional<IngredientDTO> searchRanked(String needle) {
+        return searchRanked(needle, true);
+    }
+
+    /**
+     * Ranked single search with explicit control over loose fallback.
+     *
+     * When allowLoose == false:
+     *  - only exact canonical_key OR exact alias may match
+     *  - loose matches are NOT allowed (prevents false “green” leaves)
+     *
+     * Use allowLoose=false for product ingredient list building.
+     */
+    public Optional<IngredientDTO> searchRanked(String needle, boolean allowLoose) {
         String q = normalizeNeedle(needle);
         if (q.isEmpty()) {
             return Optional.empty();
@@ -41,7 +58,7 @@ public class IngredientReadService {
             return byCanonical.map(mapper::toDto);
         }
 
-        // 2) exact alias (second tier, but still quite strong)
+        // 2) exact alias (second tier, still strong)
         var aliasHits = repo.findByAliasExact(q);
         if (!aliasHits.isEmpty()) {
             Ingredient bestAlias = aliasHits.stream()
@@ -51,7 +68,11 @@ public class IngredientReadService {
             return Optional.of(mapper.toDto(bestAlias));
         }
 
-        // 3) loose search fallback
+        // 3) loose search fallback (OPTIONAL)
+        if (!allowLoose) {
+            return Optional.empty();
+        }
+
         var looseMatches = repo.searchLoose(q);
         if (looseMatches.isEmpty()) {
             return Optional.empty();
@@ -59,7 +80,7 @@ public class IngredientReadService {
 
         Ingredient best = looseMatches.stream()
                 .sorted(Comparator
-                        .comparingInt((Ingredient i) -> rank(i, q))
+                        .comparingInt((Ingredient i) -> looseRank(i, q))
                         .thenComparingLong(Ingredient::getId))
                 .findFirst()
                 .orElseThrow();
@@ -69,6 +90,10 @@ public class IngredientReadService {
 
     /**
      * Ranked batch search.
+     *
+     * NOTE:
+     * This is "best effort". If you ever use this for product-leaf truth,
+     * add a strict variant (similar to searchRanked(needle, false)).
      */
     public List<IngredientDTO> searchManyRanked(List<String> needles) {
         if (needles == null || needles.isEmpty()) {
@@ -101,7 +126,11 @@ public class IngredientReadService {
     // Ranking helpers
     // ─────────────────────────────────────────────────────────────
 
-    private int rank(Ingredient i, String q) {
+    /**
+     * Rank for LOOSE matches only (repo.searchLoose()).
+     * Lower is better.
+     */
+    private int looseRank(Ingredient i, String q) {
         String ck = safe(i.getCanonicalKey());
         String dn = safe(i.getDisplayName());
 
@@ -111,11 +140,26 @@ public class IngredientReadService {
                 .map(a -> safe(a.getAlias()))
                 .toList();
 
+        // Exact hits (even though loose search returned them) should win.
         if (ck.equals(q)) return 0;
         if (dn.equals(q)) return 1;
         if (aliases.contains(q)) return 2;
 
+        // Then "contains" hits
+        if (!ck.isEmpty() && ck.contains(q)) return 10;
+        if (!dn.isEmpty() && dn.contains(q)) return 11;
+
+        for (String a : aliases) {
+            if (!a.isEmpty() && a.contains(q)) return 12;
+        }
+
         return 99;
+    }
+
+    private int rank(Ingredient i, String q) {
+        // Kept for backwards compatibility with existing batch behavior.
+        // (Not used for strict single-search.)
+        return looseRank(i, q);
     }
 
     private int bestRank(Ingredient i, List<String> qs) {
@@ -135,22 +179,18 @@ public class IngredientReadService {
     private String normalizeNeedle(String raw) {
         if (raw == null) return "";
 
-        String s = raw
+        return raw
                 .toLowerCase()
                 .trim()
-                // normalize whitespace like DbProductSnapshotAdapter.normalizeCanonicalKey
                 .replaceAll("\\s+", " ")
-                // normalize common unicode punctuation that causes misses
                 .replace('’', '\'')
                 .replace('–', '-')
                 .replace('—', '-');
-
-        return s;
     }
 
     // Backwards-compatible API used by IngredientController
     public Optional<IngredientDTO> findByNameOrAlias(String q) {
-        return searchRanked(q);
+        return searchRanked(q, true);
     }
 
     public List<IngredientDTO> findManyByNamesOrAliases(List<String> q) {

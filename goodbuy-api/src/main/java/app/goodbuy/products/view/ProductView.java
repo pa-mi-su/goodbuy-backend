@@ -11,6 +11,13 @@ import java.util.Optional;
 
 /**
  * High-level product view for iOS ResultView.
+ *
+ * FIXES:
+ * 1) Prevent false-positive “in DB” matches by using STRICT ranked search (no loose substring fallback).
+ * 2) CanonicalKey is DB-truth for iOS:
+ *    - If we found an ingredient in DB, we ALWAYS return canonicalKey (stable key).
+ *    - inCatalog reflects “hasDetails / researched” (may be false even if row exists).
+ *    - ratingLetter/safetyScore only exposed when hasDetails == true.
  */
 public record ProductView(
         String gtin,
@@ -91,27 +98,40 @@ public record ProductView(
                         String label = resolveLabel(i);
                         if (label == null || label.isBlank()) return null;
 
-                        // ✅ CRITICAL: Search by stable canonical key first
-                        // DTO.id should be canonical_key (stable).
+                        // Search by stable canonical key first (then canonical, then label).
                         String searchKey = firstNonBlank(
-                                i.id(),        // <-- BEST
-                                i.canonical(),  // <-- next
-                                label          // <-- last resort
+                                i.id(),
+                                i.canonical(),
+                                label
                         );
 
-                        Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey);
+                        // ✅ CRITICAL FIX:
+                        // Use STRICT search so “not in DB” ingredients do NOT accidentally match
+                        // some other ingredient via loose substring fallback.
+                        Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey, false);
+
                         if (opt.isPresent()) {
                             IngredientDTO ing = opt.get();
+
+                            // IMPORTANT:
+                            // - canonicalKey != null means "exists in our DB" (found by canonical or alias)
+                            // - inCatalog means "has real details / researched", not merely "row exists"
+                            boolean hasDetails = hasDetails(ing);
+
+                            // ✅ CRITICAL FIX:
+                            // Always expose canonicalKey if the DB lookup succeeded (DB-truth key),
+                            // even if it is a skeleton (hasDetails=false).
+                            // iOS uses canonicalKey==nil as “not in DB”.
                             return new ProductIngredientView(
                                     label,
                                     ing.canonicalKey(),
-                                    true,
-                                    ing.ratingLetter(),
-                                    ing.safetyScore()
+                                    hasDetails,
+                                    hasDetails ? ing.ratingLetter() : null,
+                                    hasDetails ? ing.safetyScore() : null
                             );
                         }
 
-                        // Not in DB yet → white leaf
+                        // Not in DB yet → missing/unknown leaf
                         return new ProductIngredientView(
                                 label,
                                 null,
@@ -131,6 +151,8 @@ public record ProductView(
 
         if (productScore == null && (productRating == null || productRating.isBlank()) && categorySupported) {
             long totalIngredients = ingredientViews.size();
+
+            // Only count ingredients that are "researched/details-present" AND have safetyScore.
             long ratedIngredients = ingredientViews.stream()
                     .filter(ProductIngredientView::inCatalog)
                     .filter(iv -> iv.safetyScore() != null)
@@ -189,6 +211,37 @@ public record ProductView(
             if (v != null && !v.isBlank()) return v.trim();
         }
         return null;
+    }
+
+    /**
+     * Determines whether an ingredient has real detail content (researched),
+     * vs. being a skeleton row created during ingestion.
+     *
+     * NOTE: This does NOT require a schema/DTO change.
+     */
+    private static boolean hasDetails(IngredientDTO ing) {
+        if (ing == null) return false;
+
+        if (ing.safetyScore() != null) return true;
+        if (ing.ratingLetter() != null && !ing.ratingLetter().isBlank()) return true;
+
+        Integer refs = ing.referencesCount();
+        if (refs != null && refs > 0) return true;
+
+        if (ing.summary() != null && !ing.summary().isBlank()) return true;
+        if (ing.description() != null && !ing.description().isBlank()) return true;
+        if (ing.func() != null && !ing.func().isBlank()) return true;
+        if (ing.concerns() != null && !ing.concerns().isBlank()) return true;
+        if (ing.category() != null && !ing.category().isBlank()) return true;
+        if (ing.regulationNotes() != null && !ing.regulationNotes().isBlank()) return true;
+
+        List<String> tags = ing.tags();
+        if (tags != null && !tags.isEmpty()) return true;
+
+        List<String> aliases = ing.aliases();
+        if (aliases != null && !aliases.isEmpty()) return true;
+
+        return false;
     }
 
     private static String resolvePrimaryImageUrl(List<String> imageUrls) {

@@ -10,6 +10,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.NOT_FOUND;
@@ -17,7 +18,10 @@ import static org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY;
 
 @Validated
 @RestController
-@RequestMapping(path = "/api/ingredients", produces = MediaType.APPLICATION_JSON_VALUE)
+@RequestMapping(
+        path = {"/api/ingredients", "/api/v1/ingredients"}, // ✅ support BOTH routes
+        produces = MediaType.APPLICATION_JSON_VALUE
+)
 public class IngredientController {
 
     private static final int BATCH_LIMIT = 200;
@@ -28,7 +32,8 @@ public class IngredientController {
         this.service = service;
     }
 
-    // A) GET /api/ingredients?q=Raw Name With Spaces (search form)
+    // A) GET /api/ingredients?q=Raw Name With Spaces
+    //    GET /api/v1/ingredients?q=...
     @GetMapping(params = "q")
     public IngredientDTO getOneByQuery(@RequestParam("q") String q) {
         String query = normalize(q);
@@ -45,7 +50,10 @@ public class IngredientController {
                 );
     }
 
-    // B) GET /api/ingredients/{nameOrKey} (path form)
+    // B) GET /api/ingredients/{nameOrKey}
+    //    GET /api/v1/ingredients/{nameOrKey}
+    //
+    // Keep this for backwards compatibility, but the client SHOULD prefer ?q=
     @GetMapping("/{nameOrKey:.+}")
     public IngredientDTO getOne(@PathVariable("nameOrKey") String nameOrKey) {
         String query = normalize(nameOrKey);
@@ -63,6 +71,7 @@ public class IngredientController {
     }
 
     // POST /api/ingredients/_batch
+    // POST /api/v1/ingredients/_batch
     @PostMapping(path = "/_batch", consumes = MediaType.APPLICATION_JSON_VALUE)
     public List<IngredientDTO> batch(@RequestBody List<String> names) {
         if (names == null) {
@@ -81,7 +90,6 @@ public class IngredientController {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_request");
         }
 
-        // Each name gets its best-ranked ingredient (canonical > alias > loose)
         return service.searchManyRanked(cleaned);
     }
 
@@ -90,10 +98,14 @@ public class IngredientController {
     private String normalize(String raw) {
         if (raw == null) return "";
         String s = raw.trim();
+
+        // Query-form sometimes gives '+' for space
+        s = s.replace('+', ' ');
+
         // decode up to twice to handle %2520 → %20 → " "
         s = decodeOnce(s);
-        s = decodeOnce(s);           // second pass (safe no-op if not encoded)
-        s = s.replace('+', ' ');     // treat + as space if it came from query form
+        s = decodeOnce(s);
+
         return s.trim();
     }
 
