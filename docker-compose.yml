@@ -20,6 +20,8 @@ services:
       context: .
       dockerfile: goodbuy-api/Dockerfile
     image: goodbuy-api:local
+    env_file:
+      - ./.secrets/app-secrets.properties
     environment:
       SPRING_APPLICATION_NAME: goodbuy-api
       SERVER_PORT: "8080"

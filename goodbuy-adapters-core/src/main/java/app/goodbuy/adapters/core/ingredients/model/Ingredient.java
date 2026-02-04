@@ -1,6 +1,7 @@
 package app.goodbuy.adapters.core.ingredients.model;
 
 import jakarta.persistence.*;
+
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -23,17 +24,12 @@ public class Ingredient {
     @Column(name = "summary", columnDefinition = "TEXT")
     private String summary;
 
-    // ❗️ FIXED: removed precision/scale to avoid Hibernate crash
+    // No precision/scale here — rely on DB NUMERIC(4,2)
     @Column(name = "safety_score")
     private BigDecimal safetyScore;
 
     @Column(name = "rating_letter")
     private String ratingLetter;
-
-    @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "ingredient_sources", joinColumns = @JoinColumn(name = "ingredient_id"))
-    @Column(name = "url", nullable = false)
-    private List<String> sourceUrls = new ArrayList<>();
 
     @Column(name = "category")
     private String category;
@@ -44,10 +40,10 @@ public class Ingredient {
     @Column(name = "is_active", nullable = false)
     private boolean isActive = true;
 
-    @Column(name = "created_at")
+    @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
-    @Column(name = "updated_at")
+    @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
     @Column(name = "description", columnDefinition = "TEXT")
@@ -75,14 +71,21 @@ public class Ingredient {
     // ───────────────────────────────
     @PrePersist
     void onCreate() {
-        var now = OffsetDateTime.now();
+        OffsetDateTime now = OffsetDateTime.now();
         if (createdAt == null) createdAt = now;
         if (updatedAt == null) updatedAt = now;
+        if (referencesCount == null) referencesCount = 0;
+        if (canonicalKey != null) canonicalKey = canonicalKey.trim();
+        if (displayName != null) displayName = displayName.trim();
+        if (category != null) category = category.trim();
     }
 
     @PreUpdate
     void onUpdate() {
         updatedAt = OffsetDateTime.now();
+        if (canonicalKey != null) canonicalKey = canonicalKey.trim();
+        if (displayName != null) displayName = displayName.trim();
+        if (category != null) category = category.trim();
     }
 
     // ───────────────────────────────
@@ -104,9 +107,6 @@ public class Ingredient {
 
     public String getRatingLetter() { return ratingLetter; }
     public void setRatingLetter(String ratingLetter) { this.ratingLetter = ratingLetter; }
-
-    public List<String> getSourceUrls() { return sourceUrls; }
-    public void setSourceUrls(List<String> sourceUrls) { this.sourceUrls = sourceUrls; }
 
     public String getCategory() { return category; }
     public void setCategory(String category) { this.category = category; }
@@ -136,8 +136,8 @@ public class Ingredient {
     public void setReferencesCount(Integer referencesCount) { this.referencesCount = referencesCount; }
 
     public List<String> getTags() { return tags; }
-    public void setTags(List<String> tags) { this.tags = tags; }
+    public void setTags(List<String> tags) { this.tags = (tags == null) ? new ArrayList<>() : tags; }
 
     public List<IngredientAlias> getAliases() { return aliases; }
-    public void setAliases(List<IngredientAlias> aliases) { this.aliases = aliases; }
+    public void setAliases(List<IngredientAlias> aliases) { this.aliases = (aliases == null) ? new ArrayList<>() : aliases; }
 }

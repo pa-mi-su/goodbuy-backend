@@ -7,6 +7,7 @@ COPY pom.xml .
 COPY goodbuy-core/pom.xml                 goodbuy-core/pom.xml
 COPY goodbuy-adapters-catalog/pom.xml     goodbuy-adapters-catalog/pom.xml
 COPY goodbuy-adapters-core/pom.xml        goodbuy-adapters-core/pom.xml
+COPY goodbuy-adapters-enrichment/pom.xml  goodbuy-adapters-enrichment/pom.xml
 COPY goodbuy-api/pom.xml                  goodbuy-api/pom.xml
 
 # Pre-fetch dependencies for all modules defined in parent pom
@@ -16,6 +17,7 @@ RUN mvn -q -B -U -DskipTests dependency:go-offline
 COPY goodbuy-core/                 goodbuy-core/
 COPY goodbuy-adapters-catalog/     goodbuy-adapters-catalog/
 COPY goodbuy-adapters-core/        goodbuy-adapters-core/
+COPY goodbuy-adapters-enrichment/  goodbuy-adapters-enrichment/
 COPY goodbuy-api/                  goodbuy-api/
 
 # Build API (and required modules via -am)
