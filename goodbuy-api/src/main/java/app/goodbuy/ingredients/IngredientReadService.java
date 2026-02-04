@@ -126,16 +126,29 @@ public class IngredientReadService {
     }
 
     private String safe(String s) {
-        return s == null ? "" : s.toLowerCase().trim();
+        return s == null ? "" : s.toLowerCase().trim().replaceAll("\\s+", " ");
     }
 
+    /**
+     * Normalize user/backend strings so they match canonical_key normalization rules.
+     */
     private String normalizeNeedle(String raw) {
         if (raw == null) return "";
-        return raw.toLowerCase().trim();
+
+        String s = raw
+                .toLowerCase()
+                .trim()
+                // normalize whitespace like DbProductSnapshotAdapter.normalizeCanonicalKey
+                .replaceAll("\\s+", " ")
+                // normalize common unicode punctuation that causes misses
+                .replace('’', '\'')
+                .replace('–', '-')
+                .replace('—', '-');
+
+        return s;
     }
 
     // Backwards-compatible API used by IngredientController
-
     public Optional<IngredientDTO> findByNameOrAlias(String q) {
         return searchRanked(q);
     }

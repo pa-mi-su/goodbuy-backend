@@ -53,11 +53,12 @@ public class DbProductLookupAdapter implements ProductLookupPort {
         log.info("DbProductLookupAdapter.findByGtin: product hit id={} ean={} name={} brand={}",
                 product.getId(), product.getEan(), safe(product.getName()), safe(product.getBrand()));
 
-        // Force-load product_ingredients from DB and attach to entity
-        List<ProductIngredientEntity> links = productIngredientRepo.findByProduct(product);
+        // ✅ CRITICAL FIX:
+        // Fetch-join ingredient so mapping always has fully initialized Ingredient rows.
+        List<ProductIngredientEntity> links = productIngredientRepo.findByProductWithIngredient(product);
         product.setProductIngredients(links);
 
-        log.info("DbProductLookupAdapter.findByGtin: productIngredientsCount={} for productId={}",
+        log.info("DbProductLookupAdapter.findByGtin: productIngredientsCount={} (with ingredient fetched) for productId={}",
                 links.size(), product.getId());
 
         ProductDetailDto dto = mapper.toDto(product);
@@ -72,9 +73,8 @@ public class DbProductLookupAdapter implements ProductLookupPort {
     private static String normalizeToGtin14(String raw) {
         if (raw == null) return null;
         String digits = raw.trim();
-        if (!digits.matches("\\d+")) {
-            return null;
-        }
+        if (!digits.matches("\\d+")) return null;
+
         return switch (digits.length()) {
             case 14 -> digits;
             case 13 -> "0" + digits;

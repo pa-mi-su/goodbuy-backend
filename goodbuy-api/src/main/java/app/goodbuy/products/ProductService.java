@@ -1,6 +1,5 @@
 package app.goodbuy.products;
 
-import app.goodbuy.adapters.catalog.CatalogTransportException;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
@@ -44,9 +43,7 @@ public class ProductService {
 
     /** Human-friendly provider name for logs & error responses (external side). */
     public String activeSourceName() {
-        if (external == null) {
-            return "internal";
-        }
+        if (external == null) return "internal";
         String n = external.getClass().getSimpleName().toLowerCase();
         if (n.contains("eandb")) return "EAN-DB";
         if (n.contains("eansearch")) return "EAN-Search";
@@ -62,23 +59,20 @@ public class ProductService {
      */
     public ProductDetailDto getByGtinOrNull(String gtin14) {
         String code = normalize(gtin14);
-        if (code == null) {
-            return null;
-        }
+        if (code == null) return null;
 
         // 1) DB FIRST
         ProductDetailDto fromDbFirst = tryDbLookup(code);
         if (fromDbFirst != null) {
             int count = fromDbFirst.ingredients() == null ? 0 : fromDbFirst.ingredients().size();
-            log.info("ProductService.getByGtinOrNull: using DB snapshot with {} ingredients for gtin={}",
-                    count, code);
+            log.info("ProductService.getByGtinOrNull: using DB snapshot with {} ingredients for gtin={}", count, code);
             return fromDbFirst;
         }
 
         // 2) External if DB has nothing
         ProductDetailDto fromExternal = fetchFromExternal(code); // may throw 503
         if (fromExternal == null) {
-            // True miss: no DB + external returned empty (e.g. real 404)
+            // True miss: no DB + external returned empty
             return null;
         }
 
@@ -89,14 +83,12 @@ public class ProductService {
         ProductDetailDto fromDbAfterSave = tryDbLookup(code);
         if (fromDbAfterSave != null) {
             int count = fromDbAfterSave.ingredients() == null ? 0 : fromDbAfterSave.ingredients().size();
-            log.info("ProductService.getByGtinOrNull: after snapshot, DB has {} ingredients for gtin={}",
-                    count, code);
+            log.info("ProductService.getByGtinOrNull: after snapshot, DB has {} ingredients for gtin={}", count, code);
             return fromDbAfterSave;
         }
 
         // 5) Last resort: return external DTO
-        log.warn("ProductService.getByGtinOrNull: snapshot saved but DB still empty for gtin={}, returning external DTO",
-                code);
+        log.warn("ProductService.getByGtinOrNull: snapshot saved but DB still empty for gtin={}, returning external DTO", code);
         return fromExternal;
     }
 
@@ -121,7 +113,8 @@ public class ProductService {
             log.debug("goodbuy-db miss gtin14={}", code);
             return null;
         } catch (Exception e) {
-            log.warn("goodbuy-db error on get gtin14={} msg={}", code, e.getMessage());
+            log.warn("goodbuy-db error on get gtin14={} type={} msg={}",
+                    code, e.getClass().getSimpleName(), e.getMessage());
             return null;
         }
     }
@@ -137,14 +130,15 @@ public class ProductService {
             log.info("goodbuy-db snapshot saved gtin14={} name={} brand={}",
                     gtin, safe(dto.name()), safe(dto.brand()));
         } catch (Exception e) {
-            log.warn("goodbuy-db error on snapshot gtin14={} msg={}", gtin, e.getMessage());
+            log.warn("goodbuy-db error on snapshot gtin14={} type={} msg={}",
+                    gtin, e.getClass().getSimpleName(), e.getMessage());
         }
     }
 
     /**
      * External fetch that distinguishes:
      *  - Optional.empty() => true miss
-     *  - CatalogTransportException => catalog down => 503
+     *  - any exception => catalog down => 503
      */
     private ProductDetailDto fetchFromExternal(String code) {
         if (external == null) return null;
@@ -166,21 +160,9 @@ public class ProductService {
             log.warn("catalog miss provider={} gtin14={} durMs={}", provider, code, ms);
             return null;
 
-        } catch (CatalogTransportException e) {
-            long ms = Duration.between(t0, Instant.now()).toMillis();
-            log.warn("catalog unavailable provider={} gtin14={} durMs={} msg={}",
-                    provider, code, ms, e.getMessage());
-
-            // Critical behavior change:
-            // DO NOT convert this to "not found". This is a provider outage / throttle / timeout.
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "External catalog temporarily unavailable (" + provider + "). Please retry."
-            );
-
         } catch (Exception e) {
             long ms = Duration.between(t0, Instant.now()).toMillis();
-            log.warn("catalog unexpected_error provider={} gtin14={} durMs={} type={} msg={}",
+            log.warn("catalog unavailable provider={} gtin14={} durMs={} type={} msg={}",
                     provider, code, ms, e.getClass().getSimpleName(), e.getMessage());
 
             throw new ResponseStatusException(

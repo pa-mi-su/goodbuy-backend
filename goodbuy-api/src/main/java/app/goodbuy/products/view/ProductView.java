@@ -11,22 +11,6 @@ import java.util.Optional;
 
 /**
  * High-level product view for iOS ResultView.
- *
- *  - domain: our coarse category ("cleaning", "baby", "food", "unknown", …)
- *  - categorySupported:
- *        true  → we try to rate the product (subject to coverage rules)
- *        false → we do NOT rate; client should show "not rated yet" UX
- *
- *  - safetyScore / ratingLetter at PRODUCT level:
- *        primary source is the product-level score/letter coming from ProductDetailDto
- *        (DB scoring engine). If those are missing, and the category is supported,
- *        we fall back to ingredient-based full-coverage logic.
- *
- *  - primaryImageUrl:
- *        chosen from dto.images() in this order:
- *           1) First URL that looks like an S3-hosted GoodBuy image
- *              (contains ".s3.amazonaws.com")
- *           2) First URL from dto.images() (if any)
  */
 public record ProductView(
         String gtin,
@@ -41,8 +25,8 @@ public record ProductView(
         List<String> claims,
         List<String> hazards,
         String source,
-        BigDecimal safetyScore,   // product-level score (null if NR / unsupported)
-        String ratingLetter       // product-level letter: A–F or "NR"
+        BigDecimal safetyScore,
+        String ratingLetter
 ) {
 
     public static ProductView of(ProductDetailDto dto,
@@ -71,7 +55,6 @@ public record ProductView(
                         .distinct()
                         .toList();
 
-        // Prefer S3-looking URL, else first
         String primaryImageUrl = resolvePrimaryImageUrl(imageUrls);
 
         // Build ingredient views
@@ -86,9 +69,8 @@ public record ProductView(
                     .filter(Objects::nonNull)
                     .map(i -> {
                         String label = resolveLabel(i);
-                        if (label == null || label.isBlank()) {
-                            return null;
-                        }
+                        if (label == null || label.isBlank()) return null;
+
                         return new ProductIngredientView(
                                 label,
                                 null,
@@ -107,14 +89,15 @@ public record ProductView(
                     .filter(Objects::nonNull)
                     .map(i -> {
                         String label = resolveLabel(i);
-                        if (label == null || label.isBlank()) {
-                            return null;
-                        }
+                        if (label == null || label.isBlank()) return null;
 
-                        // Prefer canonical key for search if present, else fallback to label
-                        String searchKey = (i.canonical() != null && !i.canonical().isBlank())
-                                ? i.canonical().trim()
-                                : label;
+                        // ✅ CRITICAL: Search by stable canonical key first
+                        // DTO.id should be canonical_key (stable).
+                        String searchKey = firstNonBlank(
+                                i.id(),        // <-- BEST
+                                i.canonical(),  // <-- next
+                                label          // <-- last resort
+                        );
 
                         Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey);
                         if (opt.isPresent()) {
@@ -126,16 +109,16 @@ public record ProductView(
                                     ing.ratingLetter(),
                                     ing.safetyScore()
                             );
-                        } else {
-                            // Not in DB yet → white leaf
-                            return new ProductIngredientView(
-                                    label,
-                                    null,
-                                    false,
-                                    null,
-                                    null
-                            );
                         }
+
+                        // Not in DB yet → white leaf
+                        return new ProductIngredientView(
+                                label,
+                                null,
+                                false,
+                                null,
+                                null
+                        );
                     })
                     .filter(Objects::nonNull)
                     .distinct()
@@ -143,12 +126,9 @@ public record ProductView(
         }
 
         // ── Product-level scoring ─────────────────────────────────────────────
-        // 1) Prefer product-level score/letter coming from ProductDetailDto
         BigDecimal productScore = dto.safetyScore();
         String productRating    = dto.ratingLetter();
 
-        // 2) Only if DTO has no product-level rating do we fall back to
-        //    ingredient-based full-coverage logic (and only for supported domains).
         if (productScore == null && (productRating == null || productRating.isBlank()) && categorySupported) {
             long totalIngredients = ingredientViews.size();
             long ratedIngredients = ingredientViews.stream()
@@ -159,7 +139,6 @@ public record ProductView(
             boolean fullCoverage = totalIngredients > 0 && ratedIngredients == totalIngredients;
 
             if (fullCoverage) {
-                // Worst (lowest) ingredient score drives product score.
                 for (ProductIngredientView iv : ingredientViews) {
                     if (!iv.inCatalog()) continue;
                     BigDecimal s = iv.safetyScore();
@@ -173,12 +152,7 @@ public record ProductView(
                 if (productRating == null || productRating.isBlank()) {
                     productRating = "NR";
                 }
-            } else if (totalIngredients > 0) {
-                // We know some ingredients, but NOT all → product is NR.
-                productScore = null;
-                productRating = "NR";
             } else {
-                // No ingredients at all → NR.
                 productScore = null;
                 productRating = "NR";
             }
@@ -194,8 +168,8 @@ public record ProductView(
                 primaryImageUrl,
                 imageUrls,
                 ingredientViews,
-                List.of(),   // claims placeholder
-                List.of(),   // hazards placeholder
+                List.of(),
+                List.of(),
                 source,
                 productScore,
                 productRating
@@ -203,34 +177,28 @@ public record ProductView(
     }
 
     private static String resolveLabel(ProductDetailDto.IngredientDto i) {
-        if (i.original() != null && !i.original().isBlank()) {
-            return i.original().trim();
-        } else if (i.canonical() != null && !i.canonical().isBlank()) {
-            return i.canonical().trim();
-        } else if (i.id() != null && !i.id().isBlank()) {
-            return i.id().trim();
+        if (i.original() != null && !i.original().isBlank()) return i.original().trim();
+        if (i.canonical() != null && !i.canonical().isBlank()) return i.canonical().trim();
+        if (i.id() != null && !i.id().isBlank()) return i.id().trim();
+        return null;
+    }
+
+    private static String firstNonBlank(String... vals) {
+        if (vals == null) return null;
+        for (String v : vals) {
+            if (v != null && !v.isBlank()) return v.trim();
         }
         return null;
     }
 
-    /**
-     * Decide which image URL to expose as primary using only dto.images():
-     *   1) First URL that looks like an S3 GoodBuy image (contains ".s3.amazonaws.com")
-     *   2) First URL from list
-     */
     private static String resolvePrimaryImageUrl(List<String> imageUrls) {
-        if (imageUrls == null || imageUrls.isEmpty()) {
-            return null;
-        }
+        if (imageUrls == null || imageUrls.isEmpty()) return null;
 
-        // Prefer any S3-hosted URL
         for (String url : imageUrls) {
             if (url != null && url.contains(".s3.amazonaws.com")) {
                 return url;
             }
         }
-
-        // Fallback: first URL
         return imageUrls.get(0);
     }
 }

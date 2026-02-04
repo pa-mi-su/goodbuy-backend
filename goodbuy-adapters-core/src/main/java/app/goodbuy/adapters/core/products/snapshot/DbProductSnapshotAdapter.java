@@ -1,14 +1,18 @@
-// DbProductSnapshotAdapter.java
 package app.goodbuy.adapters.core.products.snapshot;
 
+import app.goodbuy.adapters.core.citations.service.IngredientCitationWriter;
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
+import app.goodbuy.adapters.core.ingredients.service.IngredientSignalsWriter;
 import app.goodbuy.adapters.core.ingredients.service.MissingIngredientReportService;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.model.ProductIngredientEntity;
 import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
 import app.goodbuy.adapters.core.products.repo.ProductRepository;
 import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
+import app.goodbuy.core.ingredients.port.IngredientAutoEnricherPort;
+import app.goodbuy.core.ingredients.port.IngredientEnrichmentRequest;
+import app.goodbuy.core.ingredients.port.IngredientEnrichmentResult;
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductDomainConfigPort;
@@ -31,13 +35,30 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     private static final Logger log = LoggerFactory.getLogger(DbProductSnapshotAdapter.class);
+
+    /**
+     * NOTE: adapters-core must not reference concrete implementations from other modules.
+     * We therefore only parse best-effort PubChem metadata from the enricher's note string.
+     *
+     * Convention (recommended):
+     *   note = "pubchem_cid=123;pubchem_mutagen=true;pubchem_reproductive_toxin=false;..."
+     */
+    private static final Pattern NOTE_PUBCHEM_CID = Pattern.compile("\\bpubchem_cid=(\\d+)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NOTE_PUBCHEM_MUTAGEN = Pattern.compile("\\bpubchem_mutagen=(true|false)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NOTE_PUBCHEM_REPRO = Pattern.compile("\\bpubchem_reproductive_toxin=(true|false)\\b", Pattern.CASE_INSENSITIVE);
+
+    private static final String PROVIDER_PUBCHEM = "PUBCHEM";
 
     private final ProductRepository productRepo;
     private final ProductIngredientRepository productIngredientRepo;
@@ -47,6 +68,12 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductDomainConfigPort domainConfig;
     private final ProductScoringAdapterService productScoringAdapter;
     private final MissingIngredientReportService missingIngredientReportService;
+
+    private final IngredientCitationWriter citationWriter;
+    private final IngredientSignalsWriter signalsWriter;
+
+    // Optional: only present if auto-enrichment is enabled + wired
+    private final IngredientAutoEnricherPort autoEnricher; // may be null
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
@@ -61,7 +88,10 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             ProductDomainResolverPort domainResolver,
             ProductDomainConfigPort domainConfig,
             ProductScoringAdapterService productScoringAdapter,
-            MissingIngredientReportService missingIngredientReportService
+            MissingIngredientReportService missingIngredientReportService,
+            IngredientCitationWriter citationWriter,
+            IngredientSignalsWriter signalsWriter,
+            Optional<IngredientAutoEnricherPort> autoEnricher
     ) {
         this.productRepo = productRepo;
         this.productIngredientRepo = productIngredientRepo;
@@ -71,6 +101,12 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         this.domainConfig = domainConfig;
         this.productScoringAdapter = productScoringAdapter;
         this.missingIngredientReportService = missingIngredientReportService;
+        this.citationWriter = citationWriter;
+        this.signalsWriter = signalsWriter;
+        this.autoEnricher = autoEnricher.orElse(null);
+
+        log.info("DbProductSnapshotAdapter wiring: autoEnricher={}",
+                this.autoEnricher == null ? "<none>" : this.autoEnricher.getClass().getSimpleName());
     }
 
     @Override
@@ -91,21 +127,17 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         log.info("saveSnapshot: BEGIN gtin={} name='{}' brand='{}'",
                 ean14, safe(dto.name()), safe(dto.brand()));
 
-        ProductEntity product = productRepo.findByEan(ean14)
-                .orElseGet(ProductEntity::new);
+        ProductEntity product = productRepo.findByEan(ean14).orElseGet(ProductEntity::new);
 
         boolean isNew = (product.getId() == null);
-        if (isNew) {
-            product.setEan(ean14);
-        }
+        if (isNew) product.setEan(ean14);
 
         product.setName(dto.name());
         product.setBrand(dto.brand());
         product.setCategory(dto.category());
         product.setDescription(dto.description());
 
-        // ───────────── DOMAIN CLASSIFICATION (PERSISTED) ─────────────
-        String existingDomain = product.getDomain(); // may be "unknown" or null
+        String existingDomain = product.getDomain();
 
         ProductDomain domainEnum = domainResolver.classify(
                 existingDomain,
@@ -157,10 +189,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         product = productRepo.save(product);
         log.info("saveSnapshot: product persisted id={} ean={} (isNew={}) domain={} enabled={} rated={} s3Url={}",
-                product.getId(), product.getEan(), isNew, product.getDomain(), enabled, rated, safe(product.getPrimaryImageS3Url()));
+                product.getId(), product.getEan(), isNew, product.getDomain(), enabled, rated,
+                safe(product.getPrimaryImageS3Url()));
 
-        // ✅ DB-driven gate:
-        // If domain is not enabled, DO NOT seed ingredients and DO NOT report missing ingredients.
         if (!enabled) {
             log.info("saveSnapshot: domain={} not enabled — skipping ingredients + scoring. gtin={}", domainCode, ean14);
             return;
@@ -182,7 +213,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             log.info("saveSnapshot: cleared {} existing product_ingredients for productId={}", removed, product.getId());
         }
 
-        product.getProductIngredients().clear();
+        if (product.getProductIngredients() != null) {
+            product.getProductIngredients().clear();
+        }
 
         int linked = 0;
         Set<String> seenKeysThisSnapshot = new HashSet<>();
@@ -193,7 +226,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             String displayName = firstNonBlank(ing.original(), ing.canonical(), ing.id());
             if (displayName == null) continue;
 
-            // ✅ Skip label headers / qualifiers masquerading as ingredients
             if (isNonIngredientToken(displayName)) {
                 log.info("saveSnapshot: skipping non-ingredient token displayName='{}' gtin={}",
                         safe(displayName), ean14);
@@ -209,15 +241,18 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 continue;
             }
 
-            // Normalize canonical key for storage/lookup
             String canonicalKey = normalizeCanonicalKey(rawKeyCandidate);
 
-            // Dedupe per snapshot by normalized canonical key
             if (!seenKeysThisSnapshot.add(canonicalKey)) {
                 continue;
             }
 
-            Ingredient ingredient = resolveOrCreateIngredient(canonicalKey, displayName, ean14);
+            Ingredient ingredient = resolveOrCreateIngredient(
+                    canonicalKey,
+                    displayName,
+                    ean14,
+                    ing.externalIds()
+            );
 
             if (ingredient == null || ingredient.getId() == null) {
                 log.warn("saveSnapshot: ingredient resolution failed for canonicalKey='{}' — skipping link", canonicalKey);
@@ -240,76 +275,299 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         em.flush();
         log.debug("saveSnapshot: JPA flush complete before product scoring for gtin={}", ean14);
 
-        // If domain is enabled but not rated, skip scoring.
         if (!rated) {
             log.info("saveSnapshot: domain={} enabled but not rated — skipping product scoring. gtin={}", domainCode, ean14);
             return;
         }
 
         try {
-            var scoreResult = productScoringAdapter.scoreProduct(product);
+            Object scoreResult = productScoringAdapter.scoreProduct(product);
             log.info("saveSnapshot: product score computed gtin={} result={}", ean14, scoreResult);
         } catch (Exception ex) {
             log.warn("saveSnapshot: product scoring FAILED for gtin={} err={}", ean14, ex.toString());
         }
     }
 
-    private Ingredient resolveOrCreateIngredient(String canonicalKey,
-                                                 String displayName,
-                                                 String productEan) {
-
-        // ✅ Absolute guard: never create/link/report non-ingredient tokens
+    private Ingredient resolveOrCreateIngredient(
+            String canonicalKey,
+            String displayName,
+            String productEan,
+            Map<String, String> externalIds
+    ) {
         if (isNonIngredientToken(canonicalKey) || isNonIngredientToken(displayName)) {
             log.info("resolveOrCreateIngredient: skipping non-ingredient token canonicalKey='{}' displayName='{}' ean={}",
                     safe(canonicalKey), safe(displayName), productEan);
             return null;
         }
 
-        String needle = canonicalKey;
-
-        Ingredient ingredient = ingredientRepo
-                .findByCanonicalKeyIgnoreCase(canonicalKey)
-                .orElse(null);
+        Ingredient ingredient = ingredientRepo.findByCanonicalKeyIgnoreCase(canonicalKey).orElse(null);
 
         if (ingredient == null) {
-            List<Ingredient> candidates = ingredientRepo.findByAllNormalized(needle);
+            List<Ingredient> candidates = ingredientRepo.findByAllNormalized(canonicalKey);
             if (!candidates.isEmpty()) {
                 ingredient = candidates.get(0);
                 log.info("saveSnapshot: matched ingredient via alias/name needle='{}' → id={} canonicalKey='{}'",
-                        needle, ingredient.getId(), safe(ingredient.getCanonicalKey()));
+                        canonicalKey, ingredient.getId(), safe(ingredient.getCanonicalKey()));
             }
         }
 
-        if (ingredient == null) {
-            Ingredient created = new Ingredient();
-            created.setCanonicalKey(canonicalKey);
-            created.setDisplayName(displayName);
-            created.setActive(true);
-
-            ingredient = ingredientRepo.save(created);
-            log.info("saveSnapshot: created skeleton ingredient id={} canonicalKey='{}' displayName='{}'",
-                    ingredient.getId(), canonicalKey, safe(displayName));
-
-            try {
-                missingIngredientReportService.reportWithStatus(
-                        displayName,
-                        productEan,
-                        "backend-ingestion",
-                        "backend",
-                        "Skeleton ingredient auto-created from external catalog (canonicalKey=" + canonicalKey + ")"
-                );
-            } catch (Exception ex) {
-                log.warn("Failed to record missing ingredient report for '{}' (ean={}): {}",
-                        displayName, productEan, ex.getMessage(), ex);
+        if (ingredient != null) {
+            if (shouldAttemptEnrichmentOnExisting(ingredient) && autoEnricher != null) {
+                tryEnrichExistingIngredient(ingredient, canonicalKey, displayName, productEan, externalIds);
             }
+            return ingredient;
+        }
+
+        IngredientEnrichmentResult enr = null;
+        boolean providerEnriched = false;
+
+        String enrichmentQuery = deriveEnrichmentQuery(displayName, canonicalKey);
+
+        if (autoEnricher == null) {
+            log.info("resolveOrCreateIngredient: auto-enrich SKIPPED (no enricher wired) canonicalKey='{}' ean={}",
+                    canonicalKey, productEan);
+        } else {
+            long t0 = System.currentTimeMillis();
+            log.info("resolveOrCreateIngredient: auto-enrich ATTEMPT canonicalKey='{}' query='{}' ean={} externalIds={}",
+                    canonicalKey, safe(enrichmentQuery), productEan, externalIds == null ? 0 : externalIds.size());
+            try {
+                enr = autoEnricher.enrich(new IngredientEnrichmentRequest(
+                        canonicalKey,
+                        enrichmentQuery,
+                        externalIds,
+                        "EAN-DB",
+                        productEan
+                ));
+
+                providerEnriched = (enr != null && enr.enriched());
+                long dur = System.currentTimeMillis() - t0;
+
+                log.info("resolveOrCreateIngredient: auto-enrich RESULT canonicalKey='{}' providerOk={} durMs={} provider={} note={}",
+                        canonicalKey,
+                        providerEnriched,
+                        dur,
+                        enr == null ? "(null)" : safe(enr.provider()),
+                        enr == null ? "(null)" : safe(enr.note())
+                );
+
+            } catch (Exception ex) {
+                long dur = System.currentTimeMillis() - t0;
+                log.warn("resolveOrCreateIngredient: auto-enrich FAILED canonicalKey='{}' query='{}' ean={} durMs={} err={}",
+                        canonicalKey, safe(enrichmentQuery), productEan, dur, ex.toString());
+            }
+        }
+
+        String finalDisplayName = displayName;
+        String finalSummary = null;
+        String finalCategory = null;
+
+        List<String> citationUrls = null;
+        String citationSourceName = null;
+        String citationTitle = null;
+
+        if (providerEnriched && enr != null) {
+            if (enr.displayName() != null && !enr.displayName().isBlank()) finalDisplayName = enr.displayName();
+            finalSummary = enr.summary();
+            finalCategory = enr.category();
+
+            citationUrls = enr.sourceUrls();
+            citationSourceName = enr.provider();
+            citationTitle = enr.citationTitle();
+        }
+
+        Ingredient created = new Ingredient();
+        created.setCanonicalKey(canonicalKey);
+        created.setDisplayName(finalDisplayName);
+        created.setActive(true);
+
+        if (finalSummary != null && !finalSummary.isBlank()) created.setSummary(finalSummary);
+        if (finalCategory != null && !finalCategory.isBlank()) created.setCategory(finalCategory);
+
+        ingredient = ingredientRepo.save(created);
+
+        boolean dbSignalsWritten = false;
+        boolean isPubChem = (providerEnriched && enr != null && PROVIDER_PUBCHEM.equalsIgnoreCase(enr.provider()));
+
+        if (providerEnriched && citationUrls != null && !citationUrls.isEmpty()) {
+            String src = (citationSourceName == null || citationSourceName.isBlank()) ? "Unknown" : citationSourceName.trim();
+            try {
+                citationWriter.attachCitations(ingredient.getId(), src, citationUrls, citationTitle);
+            } catch (Exception ex) {
+                log.warn("resolveOrCreateIngredient: attach citations failed ingredientId={} canonicalKey='{}' err={}",
+                        ingredient.getId(), canonicalKey, ex.toString());
+            }
+        }
+
+        if (isPubChem && enr != null) {
+            Boolean mut = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_MUTAGEN);
+            Boolean rep = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_REPRO);
+
+            if (mut == null && externalIds != null) mut = parseBooleanLoose(externalIds.get("pubchem_mutagen"));
+            if (rep == null && externalIds != null) rep = parseBooleanLoose(externalIds.get("pubchem_reproductive_toxin"));
+
+            if (mut != null && rep != null) {
+                try {
+                    dbSignalsWritten = signalsWriter.upsertPubChemSignals(ingredient.getId(), mut, rep);
+                } catch (Exception ex) {
+                    dbSignalsWritten = false;
+                    log.warn("resolveOrCreateIngredient: PUBCHEM signal upsert FAILED ingredientId={} err={}",
+                            ingredient.getId(), ex.toString());
+                }
+            }
+        }
+
+        boolean dbEnriched = providerEnriched && (!isPubChem || dbSignalsWritten);
+
+        try {
+            missingIngredientReportService.reportWithStatus(
+                    finalDisplayName,
+                    productEan,
+                    "backend-ingestion",
+                    "backend",
+                    dbEnriched
+                            ? "Ingredient auto-enriched+created from scan (DB-confirmed) (canonicalKey=" + canonicalKey + ")"
+                            : (providerEnriched
+                            ? "Ingredient enrichment attempted but NOT DB-confirmed (canonicalKey=" + canonicalKey + ")"
+                            : "Ingredient created from scan (canonicalKey=" + canonicalKey + ")")
+            );
+        } catch (Exception ex) {
+            log.warn("Failed to record missing ingredient report for '{}' (ean={}): {}",
+                    finalDisplayName, productEan, ex.getMessage(), ex);
         }
 
         return ingredient;
     }
 
-    private String mirrorExternalImageToS3(String ean14, String externalUrl) throws Exception {
-        log.info("mirrorExternalImageToS3: BEGIN gtin={} url={}", ean14, externalUrl);
+    private boolean shouldAttemptEnrichmentOnExisting(Ingredient i) {
+        return isBlank(i.getSummary())
+                && isBlank(i.getCategory())
+                && isBlank(i.getDescription())
+                && isBlank(i.getFuncUse())
+                && isBlank(i.getConcerns());
+    }
 
+    private void tryEnrichExistingIngredient(
+            Ingredient ingredient,
+            String canonicalKey,
+            String displayName,
+            String productEan,
+            Map<String, String> externalIds
+    ) {
+        String enrichmentQuery = deriveEnrichmentQuery(displayName, canonicalKey);
+
+        IngredientEnrichmentResult enr;
+        boolean providerEnriched;
+
+        long t0 = System.currentTimeMillis();
+        try {
+            enr = autoEnricher.enrich(new IngredientEnrichmentRequest(
+                    canonicalKey,
+                    enrichmentQuery,
+                    externalIds,
+                    "EAN-DB",
+                    productEan
+            ));
+            providerEnriched = (enr != null && enr.enriched());
+        } catch (Exception ex) {
+            long dur = System.currentTimeMillis() - t0;
+            log.warn("resolveOrCreateIngredient: existing skeleton → auto-enrich FAILED ingredientId={} canonicalKey='{}' durMs={} err={}",
+                    ingredient.getId(), canonicalKey, dur, ex.toString());
+            return;
+        }
+
+        if (!providerEnriched || enr == null) return;
+
+        boolean updated = false;
+
+        if (!isBlank(enr.displayName()) && !enr.displayName().equalsIgnoreCase(ingredient.getDisplayName())) {
+            ingredient.setDisplayName(enr.displayName().trim());
+            updated = true;
+        }
+        if (isBlank(ingredient.getSummary()) && !isBlank(enr.summary())) {
+            ingredient.setSummary(enr.summary().trim());
+            updated = true;
+        }
+        if (isBlank(ingredient.getCategory()) && !isBlank(enr.category())) {
+            ingredient.setCategory(enr.category().trim());
+            updated = true;
+        }
+
+        if (updated) {
+            ingredientRepo.save(ingredient);
+        }
+
+        if (enr.sourceUrls() != null && !enr.sourceUrls().isEmpty()) {
+            try {
+                citationWriter.attachCitations(
+                        ingredient.getId(),
+                        (isBlank(enr.provider()) ? "Unknown" : enr.provider().trim()),
+                        enr.sourceUrls(),
+                        enr.citationTitle()
+                );
+            } catch (Exception ex) {
+                log.warn("resolveOrCreateIngredient: existing ingredient attach citations FAILED ingredientId={} err={}",
+                        ingredient.getId(), ex.toString());
+            }
+        }
+
+        boolean dbSignalsWritten = false;
+        boolean isPubChem = (enr.provider() != null && PROVIDER_PUBCHEM.equalsIgnoreCase(enr.provider()));
+
+        if (isPubChem) {
+            Boolean mut = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_MUTAGEN);
+            Boolean rep = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_REPRO);
+
+            if (mut == null && externalIds != null) mut = parseBooleanLoose(externalIds.get("pubchem_mutagen"));
+            if (rep == null && externalIds != null) rep = parseBooleanLoose(externalIds.get("pubchem_reproductive_toxin"));
+
+            if (mut != null && rep != null) {
+                try {
+                    dbSignalsWritten = signalsWriter.upsertPubChemSignals(ingredient.getId(), mut, rep);
+                } catch (Exception ex) {
+                    dbSignalsWritten = false;
+                    log.warn("resolveOrCreateIngredient: existing ingredient PUBCHEM signal upsert FAILED ingredientId={} err={}",
+                            ingredient.getId(), ex.toString());
+                }
+            }
+        }
+
+        boolean dbEnriched = !isPubChem || dbSignalsWritten;
+
+        try {
+            missingIngredientReportService.reportWithStatus(
+                    ingredient.getDisplayName(),
+                    productEan,
+                    "backend-ingestion",
+                    "backend",
+                    dbEnriched
+                            ? "Ingredient auto-enriched+updated from scan (DB-confirmed) (canonicalKey=" + canonicalKey + ")"
+                            : "Ingredient enrichment attempted but NOT DB-confirmed (canonicalKey=" + canonicalKey + ")"
+            );
+        } catch (Exception ex) {
+            log.warn("Failed to record missing ingredient report for existing ingredient '{}' (ean={}): {}",
+                    ingredient.getDisplayName(), productEan, ex.getMessage(), ex);
+        }
+    }
+
+    private static Boolean extractBooleanFromNote(String note, Pattern p) {
+        if (note == null) return null;
+        Matcher m = p.matcher(note);
+        if (!m.find()) return null;
+        String v = m.group(1);
+        if (v == null) return null;
+        return Boolean.parseBoolean(v.trim().toLowerCase(Locale.ROOT));
+    }
+
+    private static Boolean parseBooleanLoose(String s) {
+        if (s == null) return null;
+        String x = s.trim().toLowerCase(Locale.ROOT);
+        if (x.isBlank()) return null;
+        if (x.equals("true") || x.equals("t") || x.equals("1") || x.equals("yes") || x.equals("y")) return true;
+        if (x.equals("false") || x.equals("f") || x.equals("0") || x.equals("no") || x.equals("n")) return false;
+        return null;
+    }
+
+    private String mirrorExternalImageToS3(String ean14, String externalUrl) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(externalUrl))
                 .GET()
@@ -317,30 +575,18 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
         int status = resp.statusCode();
-
-        log.info("mirrorExternalImageToS3: HTTP {} from {}", status, externalUrl);
         if (status < 200 || status >= 300) {
             throw new IllegalStateException("HTTP " + status + " from image host");
         }
 
         byte[] bytes = resp.body();
-        int byteCount = (bytes == null) ? 0 : bytes.length;
-
-        log.info("mirrorExternalImageToS3: downloaded {} bytes for gtin={}", byteCount, ean14);
-
         String contentType = resp.headers().firstValue("Content-Type").orElse("image/jpeg");
 
         String key = "catalog/" + ean14 + "/primary/" +
                 DateTimeFormatter.ISO_INSTANT.format(Instant.now()) + "_" +
                 UUID.randomUUID().toString().replace("-", "") + ".jpg";
 
-        log.info("mirrorExternalImageToS3: uploading to S3 key={} contentType={} gtin={}",
-                key, contentType, ean14);
-
-        String s3Url = imageStorage.uploadImage(key, bytes, contentType);
-
-        log.info("mirrorExternalImageToS3: COMPLETE → s3Url={}", s3Url);
-        return s3Url;
+        return imageStorage.uploadImage(key, bytes, contentType);
     }
 
     private static String normalizeToGtin14(String raw) {
@@ -355,24 +601,25 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         };
     }
 
-    /**
-     * Canonical key normalization:
-     * - trim
-     * - lowercase
-     * - collapse internal whitespace
-     */
     private static String normalizeCanonicalKey(String raw) {
         String x = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
         x = x.replaceAll("\\s+", " ");
         return x;
     }
 
-    /**
-     * Returns true when a string is very likely a label header/qualifier
-     * and not a real ingredient identity.
-     *
-     * IMPORTANT: conservative rules to avoid dropping legitimate ingredients.
-     */
+    private static String deriveEnrichmentQuery(String displayName, String canonicalKey) {
+        String base = firstNonBlank(displayName, canonicalKey);
+        if (base == null) return null;
+
+        String x = base.trim();
+        x = x.replaceAll("\\s*\\([^)]*\\)\\s*", " ").trim();
+        x = x.replaceAll("\\b(softgel|softgels|capsule|capsules|tablet|tablets|gummy|gummies|flavor|unflavored)\\b", " ");
+        x = x.replaceAll("\\s+", " ").trim();
+        x = x.replace('’', '\'').replace('–', '-').replace('—', '-');
+
+        return x.isBlank() ? base : x;
+    }
+
     private static boolean isNonIngredientToken(String s) {
         if (s == null) return true;
 
@@ -381,23 +628,15 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         String lower = x.toLowerCase(Locale.ROOT);
 
-        // punctuation-only / delimiter junk
         if (lower.matches("^[\\p{Punct}\\s]+$")) return true;
-
-        // common label headers / qualifiers
         if (lower.endsWith(":")) return true;
 
-        // “Less than …%” style headers (the bug you hit)
         if (lower.contains("less than") && lower.contains("%")) return true;
         if (lower.contains("contains") && lower.contains("less than")) return true;
 
-        // “2% or less” style headers
         if (lower.matches(".*\\b\\d+\\s*%\\s*(or\\s*less|and\\s*under)\\b.*")) return true;
-
-        // “< 2%” style headers
         if (lower.matches(".*<\\s*\\d+\\s*%.*")) return true;
 
-        // other common non-ingredient section headers
         if (lower.startsWith("other ingredients")) return true;
         if (lower.startsWith("inactive ingredients")) return true;
         if (lower.startsWith("active ingredients")) return true;
@@ -416,5 +655,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     private static String safe(String s) {
         return (s == null || s.isBlank()) ? "(null)" : s;
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.trim().isBlank();
     }
 }
