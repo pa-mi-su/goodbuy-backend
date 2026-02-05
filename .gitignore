@@ -69,3 +69,6 @@ build/
 *.bak
 *.orig
 .secrets/
+
+# Elastic Beanstalk CLI
+.elasticbeanstalk/
