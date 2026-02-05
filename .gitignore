@@ -72,3 +72,6 @@ build/
 
 # Elastic Beanstalk CLI
 .elasticbeanstalk/
+
+# Elastic Beanstalk CLI
+.elasticbeanstalk/
