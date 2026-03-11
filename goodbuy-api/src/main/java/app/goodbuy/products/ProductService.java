@@ -1,6 +1,7 @@
 package app.goodbuy.products;
 
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.StrictProductIngestionException;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
@@ -63,33 +64,42 @@ public class ProductService {
 
         // 1) DB FIRST
         ProductDetailDto fromDbFirst = tryDbLookup(code);
-        if (fromDbFirst != null) {
+        if (isStrictlyScored(fromDbFirst)) {
             int count = fromDbFirst.ingredients() == null ? 0 : fromDbFirst.ingredients().size();
             log.info("ProductService.getByGtinOrNull: using DB snapshot with {} ingredients for gtin={}", count, code);
             return fromDbFirst;
+        }
+        if (fromDbFirst != null) {
+            log.warn("ProductService.getByGtinOrNull: DB snapshot exists but is not strictly scored gtin={}", code);
         }
 
         // 2) External if DB has nothing
         ProductDetailDto fromExternal = fetchFromExternal(code); // may throw 503
         if (fromExternal == null) {
-            // True miss: no DB + external returned empty
+            if (fromDbFirst != null) {
+                throw new ResponseStatusException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "Product exists but strict enrichment/scoring is incomplete. Please retry."
+                );
+            }
             return null;
         }
 
         // 3) Snapshot external into GoodBuy DB
-        trySnapshotSave(fromExternal);
+        strictSnapshotSave(fromExternal);
 
         // 4) Re-read from DB
         ProductDetailDto fromDbAfterSave = tryDbLookup(code);
-        if (fromDbAfterSave != null) {
+        if (isStrictlyScored(fromDbAfterSave)) {
             int count = fromDbAfterSave.ingredients() == null ? 0 : fromDbAfterSave.ingredients().size();
             log.info("ProductService.getByGtinOrNull: after snapshot, DB has {} ingredients for gtin={}", count, code);
             return fromDbAfterSave;
         }
 
-        // 5) Last resort: return external DTO
-        log.warn("ProductService.getByGtinOrNull: snapshot saved but DB still empty for gtin={}, returning external DTO", code);
-        return fromExternal;
+        throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Product ingestion did not finish with a scored result. Please retry."
+        );
     }
 
     public ProductDetailDto getDetailByGtinOrNull(String gtin14) {
@@ -119,8 +129,14 @@ public class ProductService {
         }
     }
 
-    private void trySnapshotSave(ProductDetailDto dto) {
-        if (snapshot == null || dto == null) return;
+    private void strictSnapshotSave(ProductDetailDto dto) {
+        if (dto == null) return;
+        if (snapshot == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Product snapshot pipeline is unavailable."
+            );
+        }
 
         String gtin = dto.gtin();
         if (gtin == null || gtin.isBlank()) return;
@@ -129,9 +145,15 @@ public class ProductService {
             snapshot.saveSnapshot(dto);
             log.info("goodbuy-db snapshot saved gtin14={} name={} brand={}",
                     gtin, safe(dto.name()), safe(dto.brand()));
+        } catch (StrictProductIngestionException e) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage(), e);
         } catch (Exception e) {
             log.warn("goodbuy-db error on snapshot gtin14={} type={} msg={}",
                     gtin, e.getClass().getSimpleName(), e.getMessage());
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Product ingestion failed before scoring could complete."
+            );
         }
     }
 
@@ -180,5 +202,13 @@ public class ProductService {
 
     private static String safe(String s) {
         return (s == null || s.isBlank()) ? "-" : s;
+    }
+
+    private static boolean isStrictlyScored(ProductDetailDto dto) {
+        return dto != null
+                && dto.safetyScore() != null
+                && dto.ratingLetter() != null
+                && !dto.ratingLetter().isBlank()
+                && !"NR".equalsIgnoreCase(dto.ratingLetter());
     }
 }
