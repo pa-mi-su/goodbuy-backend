@@ -6,6 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 /**
  * Admin-only endpoints for ingredient maintenance and scoring.
  *
@@ -19,9 +21,14 @@ public class IngredientAdminController {
     private static final Logger log = LoggerFactory.getLogger(IngredientAdminController.class);
 
     private final IngredientScoringAdapterService scoringAdapterService;
+    private final IngredientReviewAdminService ingredientReviewAdminService;
 
-    public IngredientAdminController(IngredientScoringAdapterService scoringAdapterService) {
+    public IngredientAdminController(
+            IngredientScoringAdapterService scoringAdapterService,
+            IngredientReviewAdminService ingredientReviewAdminService
+    ) {
         this.scoringAdapterService = scoringAdapterService;
+        this.ingredientReviewAdminService = ingredientReviewAdminService;
     }
 
     /**
@@ -42,6 +49,30 @@ public class IngredientAdminController {
         return ResponseEntity.ok(body);
     }
 
+    @GetMapping("/missing")
+    public ResponseEntity<List<IngredientReviewAdminService.MissingIngredientQueueItem>> listMissingQueue(
+            @RequestParam(defaultValue = "100") int limit
+    ) {
+        return ResponseEntity.ok(ingredientReviewAdminService.listOpenQueue(limit));
+    }
+
+    @PostMapping("/missing/resolve")
+    public ResponseEntity<ResolveMissingIngredientResponse> resolveMissingIngredient(
+            @RequestBody ResolveMissingIngredientRequest request
+    ) {
+        var result = ingredientReviewAdminService.resolveMissingIngredient(
+                request.missingName(),
+                request.canonicalKey(),
+                request.displayName()
+        );
+
+        return ResponseEntity.ok(new ResolveMissingIngredientResponse(
+                result.canonicalKey(),
+                result.resolvedReports(),
+                result.reprocessedProducts()
+        ));
+    }
+
     /**
      * Simple response DTO so the frontend (or you via curl) gets a nice payload.
      */
@@ -56,4 +87,16 @@ public class IngredientAdminController {
             return updatedCount;
         }
     }
+
+    public record ResolveMissingIngredientRequest(
+            String missingName,
+            String canonicalKey,
+            String displayName
+    ) {}
+
+    public record ResolveMissingIngredientResponse(
+            String canonicalKey,
+            int resolvedReports,
+            int reprocessedProducts
+    ) {}
 }

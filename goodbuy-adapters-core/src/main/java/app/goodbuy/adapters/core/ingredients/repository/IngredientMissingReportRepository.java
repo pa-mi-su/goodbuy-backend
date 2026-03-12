@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 public interface IngredientMissingReportRepository
@@ -24,6 +25,10 @@ public interface IngredientMissingReportRepository
             String ingredientName,
             String productEan
     );
+
+    List<IngredientMissingReportEntity> findByStatusOrderByOccurredAtDesc(String status);
+
+    List<IngredientMissingReportEntity> findByIngredientNameIgnoreCaseAndStatus(String ingredientName, String status);
 
     @Modifying
     @Query(value = """
@@ -62,7 +67,10 @@ public interface IngredientMissingReportRepository
                set app_version = :appVersion,
                    platform = :platform,
                    notes = :notes,
-                   occurred_at = :occurredAt
+                   occurred_at = :occurredAt,
+                   status = 'OPEN',
+                   resolved_canonical_key = null,
+                   resolved_at = null
              where lower(ingredient_name) = lower(:ingredientName)
                and product_ean = :productEan
             """, nativeQuery = true)
