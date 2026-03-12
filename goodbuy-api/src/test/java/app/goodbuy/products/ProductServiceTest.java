@@ -6,22 +6,22 @@ import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ProductServiceTest {
+
+    private final AsyncProductIngestionService asyncIngestionService = mock(AsyncProductIngestionService.class);
 
     @Test
     void returnsDbSnapshotWhenAlreadyStrictlyScored() {
@@ -30,31 +30,32 @@ class ProductServiceTest {
 
         when(lookup.findByGtin("00012345678901")).thenReturn(Optional.of(scored));
 
-        ProductService service = new ProductService(Optional.empty(), Optional.of(lookup), Optional.empty());
+        ProductService service = new ProductService(Optional.empty(), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty());
 
         ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
         assertEquals("A", result.ratingLetter());
+        verify(asyncIngestionService, never()).enqueue(scored);
     }
 
     @Test
-    void refusesToReturnExistingUnscoredProductWhenExternalMisses() {
+    void returnsExistingUnscoredProductWhenExternalMisses() {
         ProductLookupPort lookup = mock(ProductLookupPort.class);
         ExternalCatalogClient external = mock(ExternalCatalogClient.class);
+        ProductDetailDto partial = dto("00012345678901", null, null);
 
-        when(lookup.findByGtin("00012345678901")).thenReturn(Optional.of(dto("00012345678901", null, null)));
+        when(lookup.findByGtin("00012345678901")).thenReturn(Optional.of(partial));
         when(external.findByGtin("00012345678901")).thenReturn(Optional.empty());
 
-        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty());
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty());
 
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.getByGtinOrNull("00012345678901"));
+        ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
+        assertSame(partial, result);
     }
 
     @Test
-    void propagatesStrictSnapshotFailureAsServiceUnavailable() {
+    void returnsExternalProductWhenStrictSnapshotFails() {
         ProductLookupPort lookup = mock(ProductLookupPort.class);
         ExternalCatalogClient external = mock(ExternalCatalogClient.class);
         ProductSnapshotPort snapshot = mock(ProductSnapshotPort.class);
@@ -64,13 +65,33 @@ class ProductServiceTest {
         when(external.findByGtin("00012345678901")).thenReturn(Optional.of(externalDto));
         doThrow(new StrictProductIngestionException("ingredient incomplete")).when(snapshot).saveSnapshot(externalDto);
 
-        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.of(snapshot));
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.of(snapshot), asyncIngestionService, Optional.empty());
 
-        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.getByGtinOrNull("00012345678901"));
+        ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatusCode());
-        verify(snapshot).saveSnapshot(externalDto);
+        assertSame(externalDto, result);
+        verify(asyncIngestionService).enqueue(externalDto);
+    }
+
+    @Test
+    void returnsExternalProductWhenItHasMoreIngredientsThanPartialDbSnapshot() {
+        ProductLookupPort lookup = mock(ProductLookupPort.class);
+        ExternalCatalogClient external = mock(ExternalCatalogClient.class);
+        ProductSnapshotPort snapshot = mock(ProductSnapshotPort.class);
+        ProductDetailDto dbPartial = dto("00012345678901", null, null);
+        ProductDetailDto externalDto = dtoWithIngredients("00012345678901", 2);
+
+        when(lookup.findByGtin("00012345678901"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(dbPartial));
+        when(external.findByGtin("00012345678901")).thenReturn(Optional.of(externalDto));
+
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.of(snapshot), asyncIngestionService, Optional.empty());
+
+        ProductDetailDto result = service.getByGtinOrNull("00012345678901");
+
+        assertSame(externalDto, result);
+        verify(asyncIngestionService).enqueue(externalDto);
     }
 
     private static ProductDetailDto dto(String gtin, BigDecimal safetyScore, String ratingLetter) {
@@ -88,6 +109,33 @@ class ProductServiceTest {
                 "cleaning",
                 safetyScore,
                 ratingLetter
+        );
+    }
+
+    private static ProductDetailDto dtoWithIngredients(String gtin, int count) {
+        return new ProductDetailDto(
+                gtin,
+                "Demo Product",
+                "Brand",
+                "Cleaning",
+                null,
+                List.of(),
+                java.util.stream.IntStream.range(0, count)
+                        .mapToObj(i -> new ProductDetailDto.IngredientDto(
+                                "ingredient-" + i,
+                                "Ingredient " + i,
+                                "ingredient-" + i,
+                                Map.of(),
+                                null,
+                                null
+                        ))
+                        .toList(),
+                Map.of(),
+                Map.of(),
+                "EAN-DB",
+                "unknown",
+                null,
+                null
         );
     }
 }

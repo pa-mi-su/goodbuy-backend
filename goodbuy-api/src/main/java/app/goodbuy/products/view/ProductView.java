@@ -26,6 +26,8 @@ public record ProductView(
         String category,
         String domain,
         boolean categorySupported,
+        String scoringStatus,
+        String scoringMessage,
         String primaryImageUrl,
         List<String> images,
         List<ProductIngredientView> ingredients,
@@ -180,6 +182,27 @@ public record ProductView(
             }
         }
 
+        String scoringStatus = "scored";
+        String scoringMessage = null;
+        boolean missingIngredientList = categorySupported && ingredientViews.isEmpty();
+
+        boolean hasProductScore = productScore != null
+                && productRating != null
+                && !productRating.isBlank()
+                && !"NR".equalsIgnoreCase(productRating);
+
+        if (!hasProductScore) {
+            if (!categorySupported) {
+                scoringStatus = "out_of_domain";
+            } else if (missingIngredientList) {
+                scoringStatus = "missing_ingredient_list";
+                scoringMessage = "This product listing does not include an ingredient list yet. We logged it for review.";
+            } else {
+                scoringStatus = "pending_ingredients";
+                scoringMessage = "We do not have all ingredients yet, so we cannot score this product. Check back soon.";
+            }
+        }
+
         return new ProductView(
                 dto.gtin(),
                 dto.name(),
@@ -187,6 +210,8 @@ public record ProductView(
                 dto.category(),
                 effectiveDomain,
                 categorySupported,
+                scoringStatus,
+                scoringMessage,
                 primaryImageUrl,
                 imageUrls,
                 ingredientViews,

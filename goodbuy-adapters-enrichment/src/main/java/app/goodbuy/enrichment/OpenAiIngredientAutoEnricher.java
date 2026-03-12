@@ -36,6 +36,8 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
     private final String apiKey;
     private final String model;
     private final PubChemIngredientAutoEnricher pubChem;
+    private final int maxAttempts;
+    private final long retryDelayMs;
 
     public OpenAiIngredientAutoEnricher(
             Optional<PubChemIngredientAutoEnricher> pubChem,
@@ -43,18 +45,22 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
             @Value("${goodbuy.ingredients.auto-enrich.openai.api-key:}") String apiKey,
             @Value("${goodbuy.ingredients.auto-enrich.openai.model:gpt-4.1-mini}") String model,
             @Value("${goodbuy.ingredients.auto-enrich.openai.connect-timeout-ms:2000}") long connectTimeoutMs,
-            @Value("${goodbuy.ingredients.auto-enrich.openai.read-timeout-ms:8000}") long readTimeoutMs
+            @Value("${goodbuy.ingredients.auto-enrich.openai.read-timeout-ms:8000}") long readTimeoutMs,
+            @Value("${goodbuy.ingredients.auto-enrich.openai.max-attempts:3}") int maxAttempts,
+            @Value("${goodbuy.ingredients.auto-enrich.openai.retry-delay-ms:750}") long retryDelayMs
     ) {
         this.pubChem = pubChem.orElse(null);
         this.apiUrl = apiUrl.trim();
         this.apiKey = apiKey.trim();
         this.model = model.trim();
+        this.maxAttempts = Math.max(1, maxAttempts);
+        this.retryDelayMs = Math.max(0, retryDelayMs);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(connectTimeoutMs))
                 .build();
 
-        log.info("OpenAiIngredientAutoEnricher configured model={} apiUrl={} pubChemSupport={}",
-                this.model, this.apiUrl, this.pubChem != null);
+        log.info("OpenAiIngredientAutoEnricher configured model={} apiUrl={} pubChemSupport={} maxAttempts={} retryDelayMs={}",
+                this.model, this.apiUrl, this.pubChem != null, this.maxAttempts, this.retryDelayMs);
         this.readTimeout = readTimeoutMs;
     }
 
@@ -79,21 +85,38 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
             }
         }
 
-        try {
-            String responseJson = callOpenAi(req, pubChemResult);
-            JsonNode payload = om.readTree(responseJson);
-            IngredientEnrichmentResult merged = merge(req, parsePayload(payload), pubChemResult);
-            if (!isComplete(merged)) {
-                return notEnriched("openai_incomplete_profile");
+        String lastFailureNote = "openai_unknown_failure";
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                String responseJson = callOpenAi(req, pubChemResult, attempt);
+                JsonNode payload = om.readTree(responseJson);
+                IngredientEnrichmentResult merged = merge(req, parsePayload(payload), pubChemResult);
+                String incompleteReason = completenessFailure(merged);
+                if (incompleteReason == null) {
+                    return merged;
+                }
+
+                lastFailureNote = "openai_incomplete_profile_" + incompleteReason;
+                log.warn("OpenAiIngredientAutoEnricher incomplete canonicalKey='{}' attempt={}/{} reason={}",
+                        req.canonicalKey(), attempt, maxAttempts, incompleteReason);
+                if (attempt < maxAttempts) {
+                    pauseBeforeRetry();
+                }
+            } catch (Exception ex) {
+                lastFailureNote = "openai_exception_" + ex.getClass().getSimpleName();
+                log.warn("OpenAiIngredientAutoEnricher failed canonicalKey='{}' attempt={}/{}: {}",
+                        req.canonicalKey(), attempt, maxAttempts, ex.toString());
+                if (attempt < maxAttempts && isRetryable(ex)) {
+                    pauseBeforeRetry();
+                    continue;
+                }
+                break;
             }
-            return merged;
-        } catch (Exception ex) {
-            log.warn("OpenAiIngredientAutoEnricher failed canonicalKey='{}': {}", req.canonicalKey(), ex.toString());
-            return notEnriched("openai_exception_" + ex.getClass().getSimpleName());
         }
+        return notEnriched(lastFailureNote);
     }
 
-    private String callOpenAi(IngredientEnrichmentRequest req, IngredientEnrichmentResult pubChemResult) throws Exception {
+    private String callOpenAi(IngredientEnrichmentRequest req, IngredientEnrichmentResult pubChemResult, int attempt) throws Exception {
         String query = firstNonBlank(req.displayName(), req.canonicalKey());
         String requestBody = om.writeValueAsString(Map.of(
                 "model", model,
@@ -112,8 +135,18 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
                                         You enrich retail product ingredients for a consumer safety database.
                                         Return only valid JSON matching the schema.
                                         Fill every field.
-                                        Use concise factual language.
-                                        If evidence is weak, still provide the best supported low-confidence normalized value instead of leaving fields blank.
+                                        Write for a normal consumer, not a chemist or regulator.
+                                        Use short, plain-English sentences with minimal jargon.
+                                        Make displayName the label a shopper would best recognize.
+                                        Make summary a one-sentence answer to: "What is this ingredient?"
+                                        Make description explain what it is and where it is commonly used.
+                                        Make functionUse explain what it does in the product in plain language.
+                                        Make concerns explain what it can do to a person or why someone might care.
+                                        Make category human-readable, such as preservative, fragrance ingredient, solvent, color additive, plant extract, surfactant, vitamin, or mineral.
+                                        Make regulationNotes understandable to a consumer; do not write like a lawyer.
+                                        Prefer concrete everyday examples when helpful.
+                                        Do not hedge with generic filler like "more research is needed" unless truly necessary.
+                                        If evidence is weak, still provide the best supported normalized value instead of leaving fields blank.
                                         Boolean risk fields must always be present.
                                         """
                         ),
@@ -138,11 +171,16 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
         }
 
         JsonNode root = om.readTree(response.body());
-        JsonNode content = root.path("choices").path(0).path("message").path("content");
-        if (!content.isTextual() || content.asText().isBlank()) {
-            throw new IllegalStateException("OpenAI response did not contain message content");
+        JsonNode message = root.path("choices").path(0).path("message");
+        JsonNode refusal = message.path("refusal");
+        if (!refusal.isMissingNode() && !refusal.isNull() && !refusal.asText("").isBlank()) {
+            throw new IllegalStateException("OpenAI refusal: " + refusal.asText());
         }
-        return content.asText();
+        String contentText = extractContentText(message.path("content"));
+        if (contentText == null || contentText.isBlank()) {
+            throw new IllegalStateException("OpenAI response did not contain usable message content on attempt " + attempt);
+        }
+        return contentText;
     }
 
     private IngredientEnrichmentResult parsePayload(JsonNode payload) {
@@ -211,28 +249,31 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
                 pubChemResult != null && !isBlank(pubChemResult.note())
                         ? "model=" + model + ";" + pubChemResult.note()
                         : "model=" + model,
-                firstNonNull(openAi.iarcGroup(), pubChemResult == null ? null : pubChemResult.iarcGroup()),
-                firstNonNull(openAi.prop65Listed(), pubChemResult == null ? null : pubChemResult.prop65Listed()),
-                firstNonNull(openAi.ewgScore(), pubChemResult == null ? null : pubChemResult.ewgScore()),
-                firstNonNull(openAi.euProhibited(), pubChemResult == null ? null : pubChemResult.euProhibited()),
-                firstNonNull(openAi.euRestricted(), pubChemResult == null ? null : pubChemResult.euRestricted()),
-                firstNonNull(openAi.pubchemMutagen(), pubChemResult == null ? null : pubChemResult.pubchemMutagen()),
-                firstNonNull(openAi.pubchemReproductiveToxin(), pubChemResult == null ? null : pubChemResult.pubchemReproductiveToxin()),
-                firstNonNull(openAi.epaChronicToxicity(), pubChemResult == null ? null : pubChemResult.epaChronicToxicity()),
-                firstNonNull(openAi.skinIrritant(), pubChemResult == null ? null : pubChemResult.skinIrritant())
+                null,
+                null,
+                null,
+                null,
+                null,
+                pubChemResult == null ? null : pubChemResult.pubchemMutagen(),
+                pubChemResult == null ? null : pubChemResult.pubchemReproductiveToxin(),
+                null,
+                null
         );
     }
 
-    private boolean isComplete(IngredientEnrichmentResult result) {
-        return result != null
-                && !isBlank(result.displayName())
-                && !isBlank(result.summary())
-                && !isBlank(result.description())
-                && !isBlank(result.functionUse())
-                && !isBlank(result.concerns())
-                && !isBlank(result.category())
-                && !isBlank(result.regulationNotes())
-                && result.referencesCount() != null;
+    private String completenessFailure(IngredientEnrichmentResult result) {
+        if (result == null) return "result_null";
+        if (!result.enriched()) return "enriched_false";
+        if (isBlank(result.displayName())) return "display_name";
+        if (isBlank(result.summary())) return "summary";
+        if (isBlank(result.description())) return "description";
+        if (isBlank(result.functionUse())) return "function_use";
+        if (isBlank(result.concerns())) return "concerns";
+        if (isBlank(result.category())) return "category";
+        if (isBlank(result.regulationNotes())) return "regulation_notes";
+        if (result.referencesCount() == null || result.referencesCount() < 1) return "references_count";
+        if (safeList(result.sourceUrls()).isEmpty()) return "source_urls";
+        return null;
     }
 
     private String buildUserPrompt(
@@ -247,6 +288,12 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
         payload.put("sourceProvider", req.sourceProvider());
         payload.put("externalIds", req.externalIds() == null ? Map.of() : req.externalIds());
         payload.put("query", query);
+        payload.put("writingGoals", List.of(
+                "Explain the ingredient in plain English.",
+                "Help a shopper understand what it is, what it does, and why it matters.",
+                "Prefer clear everyday wording over technical jargon.",
+                "Include common real-world product uses when known."
+        ));
 
         java.util.LinkedHashMap<String, Object> pubChemPayload = new java.util.LinkedHashMap<>();
         if (pubChemResult != null) {
@@ -326,6 +373,29 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
         return Map.of("type", List.of("boolean", "null"));
     }
 
+    private static String extractContentText(JsonNode content) {
+        if (content == null || content.isMissingNode() || content.isNull()) return null;
+        if (content.isTextual()) {
+            String value = content.asText().trim();
+            return value.isEmpty() ? null : value;
+        }
+        if (content.isArray()) {
+            StringBuilder out = new StringBuilder();
+            content.forEach(part -> {
+                String type = part.path("type").asText("");
+                if ("text".equals(type)) {
+                    String text = part.path("text").asText("").trim();
+                    if (!text.isEmpty()) {
+                        if (out.length() > 0) out.append('\n');
+                        out.append(text);
+                    }
+                }
+            });
+            return out.isEmpty() ? null : out.toString();
+        }
+        return null;
+    }
+
     private static String textOrNull(JsonNode node, String field) {
         JsonNode child = node.path(field);
         if (!child.isTextual()) return null;
@@ -382,6 +452,29 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isBlank();
+    }
+
+    private boolean isRetryable(Exception ex) {
+        String message = ex.getMessage();
+        if (message == null) return true;
+        return message.contains("HTTP 408")
+                || message.contains("HTTP 409")
+                || message.contains("HTTP 429")
+                || message.contains("HTTP 500")
+                || message.contains("HTTP 502")
+                || message.contains("HTTP 503")
+                || message.contains("HTTP 504")
+                || message.contains("timed out")
+                || message.contains("GOAWAY");
+    }
+
+    private void pauseBeforeRetry() {
+        if (retryDelayMs <= 0) return;
+        try {
+            Thread.sleep(retryDelayMs);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static IngredientEnrichmentResult notEnriched(String note) {

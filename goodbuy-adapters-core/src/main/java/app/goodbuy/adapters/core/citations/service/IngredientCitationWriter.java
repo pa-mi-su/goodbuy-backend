@@ -11,7 +11,9 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
@@ -39,7 +41,7 @@ public class IngredientCitationWriter {
         this.joinRepo = joinRepo;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void attachCitations(Long ingredientId, String sourceName, List<String> urls, String citationTitleOrNull) {
         if (ingredientId == null) return;
         if (urls == null || urls.isEmpty()) return;
@@ -48,13 +50,7 @@ public class IngredientCitationWriter {
                 ? "Unknown"
                 : sourceName.trim();
 
-        SourceEntity source = sourceRepo.findByNameIgnoreCase(normalizedSource)
-                .orElseGet(() -> {
-                    SourceEntity s = new SourceEntity();
-                    s.setName(normalizedSource);
-                    // timestamps via @PrePersist
-                    return sourceRepo.save(s);
-                });
+        SourceEntity source = sourceRepo.findByNameIgnoreCase(normalizedSource).orElse(null);
 
         Ingredient ingredientRef = em.getReference(Ingredient.class, ingredientId);
 
@@ -65,15 +61,7 @@ public class IngredientCitationWriter {
             String u = url.trim();
             if (u.isBlank()) continue;
 
-            CitationEntity citation = citationRepo.findByUrl(u)
-                    .orElseGet(() -> {
-                        CitationEntity c = new CitationEntity();
-                        c.setUrl(u);
-                        c.setSource(source);
-                        c.setTitle((citationTitleOrNull == null || citationTitleOrNull.isBlank()) ? null : citationTitleOrNull.trim());
-                        c.setAccessedAt(OffsetDateTime.now());
-                        return citationRepo.save(c);
-                    });
+            CitationEntity citation = citationRepo.findByUrl(u).orElseGet(() -> createCitation(u, source, citationTitleOrNull));
 
             if (joinRepo.existsByIngredientIdAndCitationId(ingredientId, citation.getId())) {
                 continue;
@@ -82,15 +70,34 @@ public class IngredientCitationWriter {
             IngredientCitationEntity join = new IngredientCitationEntity();
             join.setIngredient(ingredientRef);
             join.setCitation(em.getReference(CitationEntity.class, citation.getId()));
-            // createdAt via @PrePersist
-            joinRepo.save(join);
+            try {
+                joinRepo.saveAndFlush(join);
+            } catch (DataIntegrityViolationException ex) {
+                if (joinRepo.existsByIngredientIdAndCitationId(ingredientId, citation.getId())) {
+                    continue;
+                }
+                throw ex;
+            }
 
             attached++;
         }
 
         if (attached > 0) {
             log.info("IngredientCitationWriter: attached {} citations -> ingredientId={} source={}",
-                    attached, ingredientId, source.getName());
+                    attached, ingredientId, source == null ? "Unknown" : source.getName());
+        }
+    }
+
+    private CitationEntity createCitation(String url, SourceEntity source, String citationTitleOrNull) {
+        CitationEntity citation = new CitationEntity();
+        citation.setUrl(url);
+        citation.setSource(source);
+        citation.setTitle((citationTitleOrNull == null || citationTitleOrNull.isBlank()) ? null : citationTitleOrNull.trim());
+        citation.setAccessedAt(OffsetDateTime.now());
+        try {
+            return citationRepo.saveAndFlush(citation);
+        } catch (DataIntegrityViolationException ex) {
+            return citationRepo.findByUrl(url).orElseThrow(() -> ex);
         }
     }
 }

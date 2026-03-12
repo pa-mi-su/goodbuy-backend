@@ -39,15 +39,15 @@ public class IngredientSignalsWriter {
         IngredientSignalsEntity entity = signalsRepo.findByIngredientIdForUpdate(ingredientId)
                 .orElseGet(() -> new IngredientSignalsEntity(ingredientId));
 
-        if (enrichment.iarcGroup() != null) entity.setIarcGroup(enrichment.iarcGroup());
-        if (enrichment.prop65Listed() != null) entity.setProp65Listed(enrichment.prop65Listed());
-        if (enrichment.ewgScore() != null) entity.setEwgScore(enrichment.ewgScore());
-        if (enrichment.euProhibited() != null) entity.setEuProhibited(enrichment.euProhibited());
-        if (enrichment.euRestricted() != null) entity.setEuRestricted(enrichment.euRestricted());
-        if (enrichment.pubchemMutagen() != null) entity.setPubchemMutagen(enrichment.pubchemMutagen());
-        if (enrichment.pubchemReproductiveToxin() != null) entity.setPubchemReproductiveToxin(enrichment.pubchemReproductiveToxin());
-        if (enrichment.epaChronicToxicity() != null) entity.setEpaChronicToxicity(enrichment.epaChronicToxicity());
-        if (enrichment.skinIrritant() != null) entity.setSkinIrritant(enrichment.skinIrritant());
+        entity.setIarcGroup(enrichment.iarcGroup());
+        entity.setProp65Listed(Boolean.TRUE.equals(enrichment.prop65Listed()));
+        entity.setEwgScore(enrichment.ewgScore());
+        entity.setEuProhibited(Boolean.TRUE.equals(enrichment.euProhibited()));
+        entity.setEuRestricted(Boolean.TRUE.equals(enrichment.euRestricted()));
+        entity.setPubchemMutagen(Boolean.TRUE.equals(enrichment.pubchemMutagen()));
+        entity.setPubchemReproductiveToxin(Boolean.TRUE.equals(enrichment.pubchemReproductiveToxin()));
+        entity.setEpaChronicToxicity(Boolean.TRUE.equals(enrichment.epaChronicToxicity()));
+        entity.setSkinIrritant(Boolean.TRUE.equals(enrichment.skinIrritant()));
 
         signalsRepo.saveAndFlush(entity);
 

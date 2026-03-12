@@ -27,6 +27,7 @@ services:
       SERVER_PORT: "8080"
       # default to dev when not explicitly set
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      GOODBUY_S3_ENABLED: ${GOODBUY_S3_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
