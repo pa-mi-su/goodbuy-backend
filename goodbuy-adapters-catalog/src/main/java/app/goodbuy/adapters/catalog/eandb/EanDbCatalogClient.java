@@ -141,34 +141,7 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
             groups.forEach(g -> {
                 JsonNode arr = g.path("ingredientsGroup");
                 if (arr.isArray()) {
-                    arr.forEach(node -> {
-                        String id = text(node, "id");
-                        String original = text(node, "originalNames", "en");
-                        String canonical = text(node, "canonicalNames", "en");
-
-                        Map<String, String> externalIds = new LinkedHashMap<>();
-                        JsonNode ext = node.path("externalIds");
-                        if (ext.isObject()) {
-                            ext.fieldNames().forEachRemaining(k -> {
-                                String v = ext.path(k).asText(null);
-                                if (v != null && !v.isBlank()) {
-                                    externalIds.put(k, v);
-                                }
-                            });
-                        }
-
-                        Boolean isVegan = boolOrNull(node, "isVegan");
-                        Boolean isVegetarian = boolOrNull(node, "isVegetarian");
-
-                        ingredients.add(new IngredientDto(
-                                emptyToNull(id),
-                                emptyToNull(original),
-                                emptyToNull(canonical),
-                                externalIds.isEmpty() ? null : externalIds,
-                                isVegan,
-                                isVegetarian
-                        ));
-                    });
+                    arr.forEach(node -> ingredients.addAll(mapIngredientNode(node)));
                 }
             });
         }
@@ -512,6 +485,102 @@ public class EanDbCatalogClient implements ExternalCatalogClient {
     private static String truncate(String s, int max) {
         if (s == null) return null;
         return (s.length() <= max) ? s : s.substring(0, max) + "…";
+    }
+
+    static List<IngredientDto> mapIngredientNode(JsonNode node) {
+        String id = text(node, "id");
+        String original = emptyToNull(text(node, "originalNames", "en"));
+        String canonical = emptyToNull(text(node, "canonicalNames", "en"));
+
+        Map<String, String> externalIds = new LinkedHashMap<>();
+        JsonNode ext = node.path("externalIds");
+        if (ext.isObject()) {
+            ext.fieldNames().forEachRemaining(k -> {
+                String v = ext.path(k).asText(null);
+                if (v != null && !v.isBlank()) {
+                    externalIds.put(k, v);
+                }
+            });
+        }
+
+        Boolean isVegan = boolOrNull(node, "isVegan");
+        Boolean isVegetarian = boolOrNull(node, "isVegetarian");
+
+        List<String> expandedLabels = expandIngredientLabels(original, canonical);
+        if (expandedLabels.isEmpty()) {
+            return List.of();
+        }
+
+        if (expandedLabels.size() == 1) {
+            return List.of(new IngredientDto(
+                    emptyToNull(id),
+                    expandedLabels.get(0),
+                    emptyToNull(firstNonBlank(canonical, expandedLabels.get(0))),
+                    externalIds.isEmpty() ? null : externalIds,
+                    isVegan,
+                    isVegetarian
+            ));
+        }
+
+        List<IngredientDto> out = new ArrayList<>();
+        for (String label : expandedLabels) {
+            out.add(new IngredientDto(
+                    null,
+                    label,
+                    label,
+                    null,
+                    isVegan,
+                    isVegetarian
+            ));
+        }
+        return out;
+    }
+
+    static List<String> expandIngredientLabels(String original, String canonical) {
+        String base = firstNonBlank(original, canonical);
+        if (base == null || base.isBlank()) {
+            return List.of();
+        }
+
+        String trimmed = base.trim();
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+
+        if (isLessThanHeaderOnly(lower)) {
+            return List.of();
+        }
+
+        String stripped = stripLessThanPrefix(trimmed);
+        if (!stripped.equals(trimmed)) {
+            return splitIngredientList(stripped);
+        }
+
+        return List.of(trimmed);
+    }
+
+    private static boolean isLessThanHeaderOnly(String lower) {
+        return lower.matches("^less\\s+than\\s*\\d+\\s*%\\s+of\\s*:?\\s*$")
+                || lower.matches("^contains\\s+less\\s+than\\s*\\d+\\s*%\\s+of\\s*:?\\s*$")
+                || lower.matches("^<\\s*\\d+\\s*%\\s+of\\s*:?\\s*$");
+    }
+
+    private static String stripLessThanPrefix(String value) {
+        String stripped = value
+                .replaceFirst("(?i)^contains\\s+less\\s+than\\s*\\d+\\s*%\\s+of\\s*:?\\s*", "")
+                .replaceFirst("(?i)^less\\s+than\\s*\\d+\\s*%\\s+of\\s*:?\\s*", "")
+                .replaceFirst("(?i)^<\\s*\\d+\\s*%\\s+of\\s*:?\\s*", "");
+        return stripped.trim();
+    }
+
+    private static List<String> splitIngredientList(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+
+        return Arrays.stream(raw.split("\\s*,\\s*"))
+                .map(String::trim)
+                .map(token -> token.replaceAll("\\s*;$", "").trim())
+                .filter(token -> !token.isBlank())
+                .toList();
     }
 
     private static String emptyToNull(String s) {
