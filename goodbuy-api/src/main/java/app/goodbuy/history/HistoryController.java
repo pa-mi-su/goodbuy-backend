@@ -78,7 +78,10 @@ public class HistoryController {
     ) {
         UUID userId = requireAuthenticatedUserId(request);
 
-        String ean = requestBody.ean().trim();
+        String ean = normalizeToGtin14(requestBody.ean());
+        if (ean == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ean must contain 12, 13, or 14 digits");
+        }
         Optional<ScanHistoryEntity> existingOpt =
                 historyRepository.findByUserIdAndEan(userId, ean);
 
@@ -132,6 +135,19 @@ public class HistoryController {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private static String normalizeToGtin14(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String digits = raw.replaceAll("\\D+", "");
+        return switch (digits.length()) {
+            case 14 -> digits;
+            case 13 -> "0" + digits;
+            case 12 -> "00" + digits;
+            default -> null;
+        };
     }
 
     // ─────────────────────────────────────
