@@ -4,6 +4,7 @@ import app.goodbuy.adapters.core.citations.service.IngredientCitationWriter;
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import app.goodbuy.adapters.core.ingredients.model.IngredientAlias;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
+import app.goodbuy.adapters.core.ingredients.service.IngredientCreationService;
 import app.goodbuy.adapters.core.ingredients.service.IngredientSignalsWriter;
 import app.goodbuy.adapters.core.ingredients.service.MissingIngredientReportService;
 import app.goodbuy.adapters.core.notifications.SlackNotificationAdapter;
@@ -24,6 +25,7 @@ import app.goodbuy.core.products.port.ProductSnapshotPort;
 import app.goodbuy.core.storage.ProductImageStoragePort;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -72,6 +74,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductDomainConfigPort domainConfig;
     private final ProductScoringAdapterService productScoringAdapter;
     private final MissingIngredientReportService missingIngredientReportService;
+    private final IngredientCreationService ingredientCreationService;
     private final SlackNotificationAdapter slackNotificationAdapter;
 
     private final IngredientCitationWriter citationWriter;
@@ -94,6 +97,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             ProductDomainConfigPort domainConfig,
             ProductScoringAdapterService productScoringAdapter,
             MissingIngredientReportService missingIngredientReportService,
+            IngredientCreationService ingredientCreationService,
             SlackNotificationAdapter slackNotificationAdapter,
             IngredientCitationWriter citationWriter,
             IngredientSignalsWriter signalsWriter,
@@ -107,6 +111,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         this.domainConfig = domainConfig;
         this.productScoringAdapter = productScoringAdapter;
         this.missingIngredientReportService = missingIngredientReportService;
+        this.ingredientCreationService = ingredientCreationService;
         this.slackNotificationAdapter = slackNotificationAdapter;
         this.citationWriter = citationWriter;
         this.signalsWriter = signalsWriter;
@@ -387,7 +392,24 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         created.setCanonicalKey(canonicalKey);
         created.setActive(true);
         applyEnrichmentToIngredient(created, enr, displayName);
-        ingredient = ingredientRepo.save(created);
+        try {
+            Long ingredientId = ingredientCreationService.createIngredient(created);
+            ingredient = ingredientRepo.findById(ingredientId).orElse(null);
+        } catch (DataIntegrityViolationException ex) {
+            ingredient = ingredientRepo.findByCanonicalKeyIgnoreCase(canonicalKey).orElse(null);
+            if (ingredient == null) {
+                throw ex;
+            }
+            log.info("resolveOrCreateIngredient: reused concurrently-created ingredient id={} canonicalKey='{}' ean={}",
+                    ingredient.getId(), canonicalKey, productEan);
+        }
+
+        if (ingredient == null || ingredient.getId() == null) {
+            throw new StrictProductIngestionException(
+                    "Ingredient row unavailable after concurrent creation for '" + displayName + "' (" + canonicalKey + ")."
+            );
+        }
+
         attachCitations(ingredient, canonicalKey, enr);
         boolean dbEnriched = writeSignalsAndScore(ingredient, canonicalKey, productEan, enr);
 
