@@ -148,6 +148,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         product.setBrand(dto.brand());
         product.setCategory(dto.category());
         product.setDescription(dto.description());
+        product.setRawIngredientText(buildRawIngredientText(dto.ingredients()));
 
         String existingDomain = product.getDomain();
 
@@ -330,7 +331,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             if (shouldAttemptEnrichmentOnExisting(ingredient) && autoEnricher != null) {
                 tryEnrichExistingIngredient(ingredient, canonicalKey, displayName, productEan, externalIds);
             }
-            assertIngredientStrictlyReady(ingredient, canonicalKey, productEan);
             return ingredient;
         }
 
@@ -373,22 +373,13 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             }
         }
 
-        if (!providerEnriched || enr == null) {
-            notifyIngredientAttention(
-                    canonicalKey,
-                    displayName,
-                    productEan,
-                    "OpenAI enrichment returned no structured ingredient profile."
-            );
-            throw new StrictProductIngestionException(
-                    "Ingredient enrichment failed for '" + displayName + "' (" + canonicalKey + ")."
-            );
-        }
-
         Ingredient created = new Ingredient();
         created.setCanonicalKey(canonicalKey);
         created.setActive(true);
-        applyEnrichmentToIngredient(created, enr, displayName);
+        created.setDisplayName(firstNonBlank(displayName, canonicalKey));
+        if (providerEnriched && enr != null) {
+            applyEnrichmentToIngredient(created, enr, displayName);
+        }
         try {
             Long ingredientId = ingredientCreationService.createIngredient(created);
             ingredient = ingredientRepo.findById(ingredientId).orElse(null);
@@ -407,8 +398,18 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             );
         }
 
-        attachCitations(ingredient, canonicalKey, enr);
-        boolean dbEnriched = writeSignalsAndScore(ingredient, canonicalKey, productEan, enr);
+        boolean dbEnriched = false;
+        if (providerEnriched && enr != null) {
+            attachCitations(ingredient, canonicalKey, enr);
+            dbEnriched = writeSignalsAndScore(ingredient, canonicalKey, productEan, enr);
+        } else {
+            notifyIngredientAttention(
+                    canonicalKey,
+                    displayName,
+                    productEan,
+                    "Ingredient created as skeleton; no structured enrichment available yet."
+            );
+        }
 
         try {
             missingIngredientReportService.reportWithStatus(
@@ -417,10 +418,10 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                     "backend-ingestion",
                     "backend",
                     dbEnriched
-                            ? "Ingredient auto-enriched+created from scan (DB-confirmed) (canonicalKey=" + canonicalKey + ")"
+                            ? "Unmatched ingredient auto-enriched+created from scan (canonicalKey=" + canonicalKey + ")"
                             : (providerEnriched
-                            ? "Ingredient enrichment attempted but NOT DB-confirmed (canonicalKey=" + canonicalKey + ")"
-                            : "Ingredient created from scan (canonicalKey=" + canonicalKey + ")")
+                            ? "Unmatched ingredient enrichment attempted but NOT DB-confirmed (canonicalKey=" + canonicalKey + ")"
+                            : "Unmatched ingredient created as skeleton from scan (canonicalKey=" + canonicalKey + ")")
             );
         } catch (Exception ex) {
             log.warn("Failed to record missing ingredient report for '{}' (ean={}): {}",
@@ -428,7 +429,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
 
         ingredient = ingredientRepo.saveAndFlush(ingredient);
-        assertIngredientStrictlyReady(ingredient, canonicalKey, productEan);
         return ingredient;
     }
 
@@ -472,23 +472,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         attachCitations(ingredient, canonicalKey, enr);
         boolean dbEnriched = writeSignalsAndScore(ingredient, canonicalKey, productEan, enr);
 
-        try {
-            missingIngredientReportService.reportWithStatus(
-                    ingredient.getDisplayName(),
-                    productEan,
-                    "backend-ingestion",
-                    "backend",
-                    dbEnriched
-                            ? "Ingredient auto-enriched+updated from scan (DB-confirmed) (canonicalKey=" + canonicalKey + ")"
-                            : "Ingredient enrichment attempted but NOT DB-confirmed (canonicalKey=" + canonicalKey + ")"
-            );
-        } catch (Exception ex) {
-            log.warn("Failed to record missing ingredient report for existing ingredient '{}' (ean={}): {}",
-                    ingredient.getDisplayName(), productEan, ex.getMessage(), ex);
-        }
-
         ingredientRepo.saveAndFlush(ingredient);
-        assertIngredientStrictlyReady(ingredient, canonicalKey, productEan);
     }
 
     private void applyEnrichmentToIngredient(Ingredient ingredient, IngredientEnrichmentResult enrichment, String fallbackDisplayName) {
@@ -692,6 +676,26 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         String x = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
         x = x.replaceAll("\\s+", " ");
         return x;
+    }
+
+    private static String buildRawIngredientText(List<ProductDetailDto.IngredientDto> ingredients) {
+        if (ingredients == null || ingredients.isEmpty()) {
+            return null;
+        }
+
+        List<String> labels = ingredients.stream()
+                .filter(Objects::nonNull)
+                .map(ing -> firstNonBlank(ing.original(), ing.canonical(), ing.id()))
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .toList();
+
+        if (labels.isEmpty()) {
+            return null;
+        }
+
+        return String.join(", ", labels);
     }
 
     private static String deriveEnrichmentQuery(String displayName, String canonicalKey) {

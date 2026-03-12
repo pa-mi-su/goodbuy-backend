@@ -76,6 +76,7 @@ public class ProductService {
             return fromDbFirst;
         }
         if (fromDbFirst != null) {
+            reportLowCoverageIngredients(fromDbFirst);
             log.info("ProductService.getByGtinOrNull: returning existing DB snapshot without re-enrichment gtin={} strictScored=false", code);
             return fromDbFirst;
         }
@@ -210,6 +211,48 @@ public class ProductService {
             );
         } catch (Exception ex) {
             log.warn("ProductService.reportMissingIngredientList: failed gtin={} err={}", dto.gtin(), ex.toString());
+        }
+    }
+
+    private void reportLowCoverageIngredients(ProductDetailDto dto) {
+        if (dto == null || productEvidenceReportService == null) {
+            return;
+        }
+        if (dto.ingredients() == null || dto.ingredients().isEmpty()) {
+            return;
+        }
+
+        try {
+            String notes = "Product is missing full ingredient coverage. Raw ingredient labels: "
+                    + dto.ingredients().stream()
+                    .map(ing -> {
+                        if (ing == null) return null;
+                        if (ing.original() != null && !ing.original().isBlank()) return ing.original().trim();
+                        if (ing.canonical() != null && !ing.canonical().isBlank()) return ing.canonical().trim();
+                        if (ing.id() != null && !ing.id().isBlank()) return ing.id().trim();
+                        return null;
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .limit(50)
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("(none)");
+
+            productEvidenceReportService.reportWithStatus(
+                    dto.gtin(),
+                    ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS,
+                    dto.name(),
+                    dto.brand(),
+                    "backend-ingestion",
+                    "backend",
+                    notes,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+        } catch (Exception ex) {
+            log.warn("ProductService.reportLowCoverageIngredients: failed gtin={} err={}", dto.gtin(), ex.toString());
         }
     }
 
