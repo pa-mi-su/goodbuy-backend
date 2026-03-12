@@ -1,7 +1,3 @@
-UPDATE product_domain_mapping
-SET domain = lower(domain)
-WHERE domain IS NOT NULL;
-
 DO $$
 BEGIN
     IF EXISTS (
@@ -13,6 +9,10 @@ BEGIN
     END IF;
 END
 $$;
+
+UPDATE product_domain_mapping
+SET domain = lower(domain)
+WHERE domain IS NOT NULL;
 
 ALTER TABLE product_domain_mapping
     ADD CONSTRAINT product_domain_mapping_domain_chk

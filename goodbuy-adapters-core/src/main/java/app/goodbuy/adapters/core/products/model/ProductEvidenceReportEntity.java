@@ -79,6 +79,21 @@ public class ProductEvidenceReportEntity {
     @Column(name = "back_image_s3_url", columnDefinition = "text")
     private String backImageS3Url;
 
+    @Column(name = "ocr_status", nullable = false, length = 32)
+    private String ocrStatus;
+
+    @Column(name = "ocr_provider", length = 64)
+    private String ocrProvider;
+
+    @Column(name = "ocr_raw_text", columnDefinition = "text")
+    private String ocrRawText;
+
+    @Column(name = "parsed_ingredient_text", columnDefinition = "text")
+    private String parsedIngredientText;
+
+    @Column(name = "last_reprocessed_at")
+    private OffsetDateTime lastReprocessedAt;
+
     /** Last time this evidence was observed/reported */
     @Column(name = "occurred_at", nullable = false)
     private OffsetDateTime occurredAt;
@@ -93,6 +108,7 @@ public class ProductEvidenceReportEntity {
         if (createdAt == null) createdAt = now;
         if (occurredAt == null) occurredAt = now;
         if (status == null || status.isBlank()) status = "REPORTED";
+        if (ocrStatus == null || ocrStatus.isBlank()) ocrStatus = "NOT_REQUESTED";
     }
 
     // ───── getters & setters ─────
@@ -128,6 +144,21 @@ public class ProductEvidenceReportEntity {
 
     public String getBackImageS3Url() { return backImageS3Url; }
     public void setBackImageS3Url(String backImageS3Url) { this.backImageS3Url = backImageS3Url; }
+
+    public String getOcrStatus() { return ocrStatus; }
+    public void setOcrStatus(String ocrStatus) { this.ocrStatus = ocrStatus; }
+
+    public String getOcrProvider() { return ocrProvider; }
+    public void setOcrProvider(String ocrProvider) { this.ocrProvider = ocrProvider; }
+
+    public String getOcrRawText() { return ocrRawText; }
+    public void setOcrRawText(String ocrRawText) { this.ocrRawText = ocrRawText; }
+
+    public String getParsedIngredientText() { return parsedIngredientText; }
+    public void setParsedIngredientText(String parsedIngredientText) { this.parsedIngredientText = parsedIngredientText; }
+
+    public OffsetDateTime getLastReprocessedAt() { return lastReprocessedAt; }
+    public void setLastReprocessedAt(OffsetDateTime lastReprocessedAt) { this.lastReprocessedAt = lastReprocessedAt; }
 
     public OffsetDateTime getOccurredAt() { return occurredAt; }
     public void setOccurredAt(OffsetDateTime occurredAt) { this.occurredAt = occurredAt; }
