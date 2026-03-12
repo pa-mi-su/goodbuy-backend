@@ -6,7 +6,7 @@ import java.time.OffsetDateTime;
 
 /**
  * Table-driven rule for mapping products into a high-level domain
- * (CLEANING, BABY, FOOD, OTHER, UNKNOWN).
+ * using canonical lowercase codes (vitamins, cleaning, baby, food, other, unknown).
  *
  * Backed by the product_domain_mapping table (V011 migration).
  *
@@ -21,7 +21,7 @@ public class ProductDomainMappingEntity {
     private Long id;
 
     /**
-     * Target domain, e.g. "CLEANING", "BABY", "FOOD", "OTHER", "UNKNOWN".
+     * Target domain, e.g. "cleaning", "baby", "food", "other", "unknown".
      * Kept as String to avoid tight coupling; DB constraint enforces valid values.
      */
     @Column(name = "domain", nullable = false, length = 32)
@@ -60,7 +60,7 @@ public class ProductDomainMappingEntity {
     private OffsetDateTime updatedAt;
 
     // ─────────────────────────────────────────────────────────────
-    // Enums matching the DB check constraints
+    // Enums matching the DB check constraints for match metadata
     // ─────────────────────────────────────────────────────────────
 
     public enum MatchField {
