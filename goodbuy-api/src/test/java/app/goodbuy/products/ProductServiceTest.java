@@ -1,6 +1,5 @@
 package app.goodbuy.products;
 
-import app.goodbuy.core.products.StrictProductIngestionException;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
@@ -13,7 +12,6 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,22 +53,20 @@ class ProductServiceTest {
     }
 
     @Test
-    void returnsExternalProductWhenStrictSnapshotFails() {
+    void returnsExternalProductWithoutEnqueueWhenCatalogHasNoIngredients() {
         ProductLookupPort lookup = mock(ProductLookupPort.class);
         ExternalCatalogClient external = mock(ExternalCatalogClient.class);
-        ProductSnapshotPort snapshot = mock(ProductSnapshotPort.class);
         ProductDetailDto externalDto = dto("00012345678901", null, null);
 
         when(lookup.findByGtin("00012345678901")).thenReturn(Optional.empty());
         when(external.findByGtin("00012345678901")).thenReturn(Optional.of(externalDto));
-        doThrow(new StrictProductIngestionException("ingredient incomplete")).when(snapshot).saveSnapshot(externalDto);
 
-        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.of(snapshot), asyncIngestionService, Optional.empty());
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty());
 
         ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
         assertSame(externalDto, result);
-        verify(asyncIngestionService).enqueue(externalDto);
+        verify(asyncIngestionService, never()).enqueue(externalDto);
     }
 
     @Test
