@@ -24,14 +24,23 @@ public class ProductScoringEngine {
      * @return product score + letter grade + reasons
      */
     public ProductScoreResult score(List<IngredientScoreResult> ingredientScores) {
+        return score(ingredientScores, "unknown");
+    }
+
+    public ProductScoreResult score(List<IngredientScoreResult> ingredientScores, String domain) {
 
         List<String> reasons = new ArrayList<>();
 
-        // ─────────────────────────────────────
-        // Edge case: no ingredients -> UNRATED
-        // ─────────────────────────────────────
         if (ingredientScores == null || ingredientScores.isEmpty()) {
             reasons.add("No ingredient data available to score this product.");
+            return ProductScoreResult.unrated(reasons);
+        }
+
+        long unratedCount = ingredientScores.stream()
+                .filter(ing -> ing == null || !ing.isRated())
+                .count();
+        if (unratedCount > 0) {
+            reasons.add("Not enough authoritative ingredient evidence to rate " + unratedCount + " ingredient(s) yet.");
             return ProductScoreResult.unrated(reasons);
         }
 
@@ -60,54 +69,58 @@ public class ProductScoringEngine {
         int score = avgScore;
         reasons.add("Average ingredient score: " + avgScore + ".");
 
-        // ─────────────────────────────────────
-        // Penalty: any F ingredients
-        // ─────────────────────────────────────
+        boolean sensitiveDomain = isSensitiveDomain(domain);
+
         if (countF > 0) {
-            int penalty = 20;
+            int penalty = 25 + (countF - 1) * 10;
             score -= penalty;
+            score = Math.min(score, sensitiveDomain ? 25 : 30);
             reasons.add("Contains " + countF + " high-concern (F) ingredient(s) (-" + penalty + ").");
         }
 
-        // ─────────────────────────────────────
-        // Penalty: any D ingredients
-        // ─────────────────────────────────────
         if (countD > 0) {
-            int penalty = 10;
+            int penalty = 15 + Math.max(0, countD - 1) * 5;
             score -= penalty;
+            score = Math.min(score, sensitiveDomain ? 45 : 54);
             reasons.add("Contains " + countD + " concerning (D) ingredient(s) (-" + penalty + ").");
         }
 
-        // ─────────────────────────────────────
-        // Penalty: many ingredients C or worse
-        // ─────────────────────────────────────
         int countCOrWorse = countC + countD + countF;
         if (countCOrWorse > 0) {
             double fracCOrWorse = countCOrWorse / (double) total;
-            if (fracCOrWorse >= 0.5) {
-                int penalty = 5;
+            if (countC > 0) {
+                score = Math.min(score, 69);
+            }
+            if (fracCOrWorse >= 0.25) {
+                int penalty = 10;
                 score -= penalty;
-                reasons.add("More than half of ingredients are C or worse (-" + penalty + ").");
+                reasons.add("At least a quarter of ingredients are C or worse (-" + penalty + ").");
             }
         }
 
-        // ─────────────────────────────────────
-        // Small boost: all ingredients A or B
-        // ─────────────────────────────────────
-        if (countC == 0 && countD == 0 && countF == 0) {
-            int boost = 3;
-            score += boost;
-            reasons.add("All ingredients are A or B only (+" + boost + ").");
+        if (countD + countF >= 2) {
+            score = Math.min(score, sensitiveDomain ? 35 : 40);
+            reasons.add("Multiple high-concern ingredients sharply cap the product score.");
         }
 
-        // ─────────────────────────────────────
-        // Clamp and map grade
-        // ─────────────────────────────────────
         score = Math.max(0, Math.min(99, score));
 
         String grade = mapGrade(score);
 
         return new ProductScoreResult(score, grade, List.copyOf(reasons));
+    }
+
+    private boolean isSensitiveDomain(String domain) {
+        if (domain == null) {
+            return false;
+        }
+        String normalized = domain.trim().toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("food")
+                || normalized.contains("supplement")
+                || normalized.contains("vitamin")
+                || normalized.contains("beauty")
+                || normalized.contains("cosmetic")
+                || normalized.contains("baby");
     }
 
     private String mapGrade(int score) {

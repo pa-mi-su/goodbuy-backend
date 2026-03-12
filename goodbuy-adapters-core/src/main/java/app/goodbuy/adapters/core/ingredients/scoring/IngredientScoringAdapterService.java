@@ -70,25 +70,19 @@ public class IngredientScoringAdapterService {
                 continue;
             }
 
-            // Map DB entity -> pure signals
-            // IMPORTANT: IngredientSignalsMapper should return null or IngredientSignals.empty()
-            // if there is no signals row.
             IngredientSignals signals = signalsMapper.fromIngredient(ing);
 
-            // 🚫 If we have NO hazard/regulatory signals at all, do NOT assign a default A/95.
-            // Leave safety_score + rating_letter as NULL so the ingredient is "unknown".
-            if (signals == null || !signals.hasAnySignal()) {
+            IngredientScoreResult result = engine.score(ing.getCanonicalKey(), signals);
+
+            if (!result.isRated()) {
                 log.debug(
-                        "Ingredient scoring: skipping id={} canonicalKey='{}' - no hazard/regulatory signals yet",
+                        "Ingredient scoring: skipping id={} canonicalKey='{}' - insufficient authoritative evidence",
                         ing.getId(),
                         ing.getCanonicalKey()
                 );
                 skipped++;
                 continue;
             }
-
-            // Pure engine
-            IngredientScoreResult result = engine.score(signals);
 
             // Persist result back into the entity
             ing.setSafetyScore(BigDecimal.valueOf(result.safetyScore()));

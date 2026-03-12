@@ -106,7 +106,7 @@ public class ProductScoringAdapterService {
             ));
         }
 
-        ProductScoreResult result = engine.score(ingredientScores);
+        ProductScoreResult result = engine.score(ingredientScores, managed.getDomain());
 
         managed.setSafetyScore(BigDecimal.valueOf(result.safetyScore()));
         managed.setRatingLetter(result.ratingLetter());
@@ -154,21 +154,24 @@ public class ProductScoringAdapterService {
         if (ing.getId() == null) return false;
 
         IngredientSignalsEntity s = signalsRepo.findById(ing.getId()).orElse(null);
-        if (s == null) return false;
+        IngredientSignals signals = s == null
+                ? IngredientSignals.empty()
+                : new IngredientSignals(
+                        s.getIarcGroup() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getIarcGroup()),
+                        s.getEwgScore() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getEwgScore()),
+                        s.isProp65Listed(),
+                        s.isEuProhibited(),
+                        s.isEuRestricted(),
+                        s.isPubchemMutagen(),
+                        s.isPubchemReproductiveToxin(),
+                        s.isEpaChronicToxicity(),
+                        s.isSkinIrritant()
+                );
 
-        IngredientSignals signals = new IngredientSignals(
-                s.getIarcGroup() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getIarcGroup()),
-                s.getEwgScore() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getEwgScore()),
-                s.isProp65Listed(),
-                s.isEuProhibited(),
-                s.isEuRestricted(),
-                s.isPubchemMutagen(),
-                s.isPubchemReproductiveToxin(),
-                s.isEpaChronicToxicity(),
-                s.isSkinIrritant()
-        );
-
-        IngredientScoreResult derived = ingredientScoringEngine.score(signals);
+        IngredientScoreResult derived = ingredientScoringEngine.score(ing.getCanonicalKey(), signals);
+        if (!derived.isRated()) {
+            return false;
+        }
 
         ing.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
         ing.setRatingLetter(derived.ratingLetter());
@@ -177,8 +180,8 @@ public class ProductScoringAdapterService {
         // But forcing flush helps you see it immediately.
         em.flush();
 
-        log.info("Ingredient score derived from signals ingredientId={} mutagen={} reproToxin={} => score={} letter={}",
-                ing.getId(), s.isPubchemMutagen(), s.isPubchemReproductiveToxin(), derived.safetyScore(), derived.ratingLetter());
+        log.info("Ingredient score derived ingredientId={} canonicalKey='{}' => score={} letter={}",
+                ing.getId(), ing.getCanonicalKey(), derived.safetyScore(), derived.ratingLetter());
 
         return true;
     }

@@ -12,7 +12,7 @@ import java.util.List;
  */
 public record IngredientScoreResult(
         int safetyScore,        // 0–100
-        String ratingLetter,    // "A"–"F"
+        String ratingLetter,    // "A"–"F" or "NR"
         List<String> reasons    // human-readable explanation snippets
 ) {
 
@@ -23,5 +23,13 @@ public record IngredientScoreResult(
         if (reasons == null) {
             throw new IllegalArgumentException("reasons must not be null");
         }
+    }
+
+    public static IngredientScoreResult unrated(String reason) {
+        return new IngredientScoreResult(0, "NR", List.of(reason));
+    }
+
+    public boolean isRated() {
+        return !"NR".equalsIgnoreCase(ratingLetter);
     }
 }
