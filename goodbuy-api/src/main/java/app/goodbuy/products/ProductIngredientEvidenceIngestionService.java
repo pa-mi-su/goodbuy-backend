@@ -1,0 +1,244 @@
+package app.goodbuy.products;
+
+import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
+import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
+import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.ingredients.IngredientTextParser;
+import app.goodbuy.core.products.port.ProductIngredientOcrPort;
+import app.goodbuy.core.products.port.ProductLookupPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+@Service
+public class ProductIngredientEvidenceIngestionService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductIngredientEvidenceIngestionService.class);
+
+    private final ProductEvidenceReportService evidenceReportService;
+    private final ProductEvidenceReportRepository evidenceReportRepository;
+    private final ProductLookupPort productLookupPort;
+    private final AsyncProductIngestionService asyncProductIngestionService;
+    private final ProductIngredientOcrPort ingredientOcrPort;
+
+    public ProductIngredientEvidenceIngestionService(
+            ProductEvidenceReportService evidenceReportService,
+            ProductEvidenceReportRepository evidenceReportRepository,
+            Optional<ProductLookupPort> productLookupPort,
+            AsyncProductIngestionService asyncProductIngestionService,
+            Optional<ProductIngredientOcrPort> ingredientOcrPort
+    ) {
+        this.evidenceReportService = evidenceReportService;
+        this.evidenceReportRepository = evidenceReportRepository;
+        this.productLookupPort = productLookupPort.orElse(null);
+        this.asyncProductIngestionService = asyncProductIngestionService;
+        this.ingredientOcrPort = ingredientOcrPort.orElse(null);
+    }
+
+    @Transactional
+    public ProductIngredientEvidenceIngestionResult ingest(
+            String productEan,
+            String productName,
+            String brandName,
+            String appVersion,
+            String platform,
+            String notes,
+            String manualIngredientText,
+            byte[] frontImageBytes,
+            String frontContentType,
+            byte[] backImageBytes,
+            String backContentType
+    ) {
+        var reportResult = evidenceReportService.reportWithStatus(
+                productEan,
+                ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS,
+                productName,
+                brandName,
+                appVersion,
+                platform,
+                notes,
+                frontImageBytes,
+                frontContentType,
+                backImageBytes,
+                backContentType
+        );
+
+        ProductEvidenceReportEntity entity = reportResult.entity();
+        OcrOutcome outcome = resolveText(
+                entity,
+                manualIngredientText,
+                frontImageBytes,
+                frontContentType,
+                backImageBytes,
+                backContentType
+        );
+
+        entity.setOcrStatus(outcome.status());
+        entity.setOcrProvider(outcome.provider());
+        entity.setOcrRawText(outcome.rawText());
+        entity.setParsedIngredientText(outcome.parsedText());
+
+        boolean queued = false;
+        if (!outcome.ingredients().isEmpty()) {
+            ProductDetailDto reprocessDto = buildReprocessDto(
+                    entity.getEan(),
+                    firstNonBlank(productName, entity.getProductName()),
+                    firstNonBlank(brandName, entity.getBrand()),
+                    outcome.ingredients()
+            );
+            entity.setStatus(ProductEvidenceReportService.STATUS_IN_PROGRESS);
+            entity.setLastReprocessedAt(OffsetDateTime.now());
+            asyncProductIngestionService.enqueue(reprocessDto);
+            queued = true;
+            log.info("ProductIngredientEvidenceIngestionService: queued reprocess ean={} ingredientCount={}",
+                    entity.getEan(), outcome.ingredients().size());
+        }
+
+        evidenceReportRepository.save(entity);
+
+        return new ProductIngredientEvidenceIngestionResult(
+                entity.getId(),
+                reportResult.isNew(),
+                entity.getOcrStatus(),
+                outcome.ingredients().size(),
+                queued
+        );
+    }
+
+    private OcrOutcome resolveText(
+            ProductEvidenceReportEntity entity,
+            String manualIngredientText,
+            byte[] frontImageBytes,
+            String frontContentType,
+            byte[] backImageBytes,
+            String backContentType
+    ) {
+        String rawText = trimToNull(manualIngredientText);
+        String provider = null;
+        String status = "NOT_REQUESTED";
+
+        if (rawText != null) {
+            provider = "manual";
+            status = "COMPLETED";
+        } else if (ingredientOcrPort != null && (frontImageBytes != null || backImageBytes != null)) {
+            Optional<ProductIngredientOcrPort.ProductIngredientOcrResult> opt = ingredientOcrPort.extract(
+                    new ProductIngredientOcrPort.ProductIngredientOcrRequest(
+                            entity.getEan(),
+                            entity.getProductName(),
+                            entity.getBrand(),
+                            frontImageBytes,
+                            frontContentType,
+                            backImageBytes,
+                            backContentType
+                    )
+            );
+            if (opt.isPresent() && trimToNull(opt.get().rawText()) != null) {
+                rawText = trimToNull(opt.get().rawText());
+                provider = trimToNull(opt.get().provider());
+                status = "COMPLETED";
+            } else {
+                status = "NO_TEXT";
+            }
+        } else if (frontImageBytes != null || backImageBytes != null) {
+            status = "NOT_AVAILABLE";
+        }
+
+        List<String> ingredients = IngredientTextParser.parse(rawText);
+        String parsedText = ingredients.isEmpty() ? null : String.join(", ", ingredients);
+
+        if (rawText != null && ingredients.isEmpty()) {
+            status = "PARSE_EMPTY";
+        }
+
+        return new OcrOutcome(status, provider, rawText, parsedText, ingredients);
+    }
+
+    private ProductDetailDto buildReprocessDto(
+            String ean,
+            String fallbackName,
+            String fallbackBrand,
+            List<String> ingredientLabels
+    ) {
+        ProductDetailDto base = productLookupPort == null
+                ? null
+                : productLookupPort.findByGtin(ean).orElse(null);
+
+        List<ProductDetailDto.IngredientDto> ingredients = ingredientLabels.stream()
+                .map(label -> new ProductDetailDto.IngredientDto(
+                        null,
+                        label,
+                        label,
+                        Map.of(),
+                        null,
+                        null
+                ))
+                .toList();
+
+        return new ProductDetailDto(
+                firstNonBlank(base == null ? null : base.gtin(), ean),
+                firstNonBlank(base == null ? null : base.name(), fallbackName),
+                firstNonBlank(base == null ? null : base.brand(), fallbackBrand),
+                base == null ? null : base.category(),
+                base == null ? null : base.description(),
+                base == null ? List.of() : safeList(base.images()),
+                ingredients,
+                base == null ? Map.of() : safeMap(base.titles()),
+                base == null ? Map.of() : safeMap(base.manufacturer()),
+                "PRODUCT-EVIDENCE",
+                firstNonBlank(base == null ? null : base.domain(), "unknown"),
+                null,
+                null
+        );
+    }
+
+    private static <T> List<T> safeList(List<T> value) {
+        return value == null ? List.of() : value;
+    }
+
+    private static <K, V> Map<K, V> safeMap(Map<K, V> value) {
+        return value == null ? Map.of() : value;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private record OcrOutcome(
+            String status,
+            String provider,
+            String rawText,
+            String parsedText,
+            List<String> ingredients
+    ) {}
+
+    public record ProductIngredientEvidenceIngestionResult(
+            Long reportId,
+            boolean isNewReport,
+            String ocrStatus,
+            int parsedIngredientCount,
+            boolean reprocessQueued
+    ) {}
+}

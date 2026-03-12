@@ -23,6 +23,7 @@
 - `product_evidence_report`
   - product-level review queue for missing product / unclear ingredients / out-of-domain
   - accepts front/back photo evidence
+  - stores OCR/raw ingredient text and parsed ingredient text when evidence is used to repair low-coverage scans
   - one row per `(ean, reason)`
 
 ## User Snapshot Tables

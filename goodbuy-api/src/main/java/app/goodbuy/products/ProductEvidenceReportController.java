@@ -12,9 +12,14 @@ import org.springframework.web.multipart.MultipartFile;
 public class ProductEvidenceReportController {
 
     private final ProductEvidenceReportService service;
+    private final ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService;
 
-    public ProductEvidenceReportController(ProductEvidenceReportService service) {
+    public ProductEvidenceReportController(
+            ProductEvidenceReportService service,
+            ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService
+    ) {
         this.service = service;
+        this.ingredientEvidenceIngestionService = ingredientEvidenceIngestionService;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -48,6 +53,46 @@ public class ProductEvidenceReportController {
         return new ProductEvidenceReportResponse(
                 result.entity().getId(),
                 !result.isNew()
+        );
+    }
+
+    @PostMapping(
+            path = "/ingredients",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ProductIngredientEvidenceResponse ingestIngredientEvidence(
+            @RequestPart("productEan") String productEan,
+            @RequestPart(value = "productName", required = false) String productName,
+            @RequestPart(value = "brandName", required = false) String brandName,
+            @RequestPart(value = "appVersion", required = false) String appVersion,
+            @RequestPart(value = "platform", required = false) String platform,
+            @RequestPart(value = "notes", required = false) String notes,
+            @RequestPart(value = "ingredientText", required = false) String ingredientText,
+            @RequestPart(value = "frontImage", required = false) MultipartFile frontImage,
+            @RequestPart(value = "backImage", required = false) MultipartFile backImage
+    ) throws Exception {
+        var result = ingredientEvidenceIngestionService.ingest(
+                productEan,
+                productName,
+                brandName,
+                appVersion,
+                platform,
+                notes,
+                ingredientText,
+                frontImage == null ? null : frontImage.getBytes(),
+                frontImage == null ? null : frontImage.getContentType(),
+                backImage == null ? null : backImage.getBytes(),
+                backImage == null ? null : backImage.getContentType()
+        );
+
+        return new ProductIngredientEvidenceResponse(
+                result.reportId(),
+                !result.isNewReport(),
+                result.ocrStatus(),
+                result.parsedIngredientCount(),
+                result.reprocessQueued()
         );
     }
 
@@ -98,5 +143,13 @@ public class ProductEvidenceReportController {
             boolean exists,
             String status,
             boolean alreadyReported
+    ) {}
+
+    public record ProductIngredientEvidenceResponse(
+            Long id,
+            boolean alreadyReported,
+            String ocrStatus,
+            int parsedIngredientCount,
+            boolean reprocessQueued
     ) {}
 }
