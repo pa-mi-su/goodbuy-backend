@@ -4,6 +4,8 @@ import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import app.goodbuy.adapters.core.ingredients.model.IngredientSignalsEntity;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientSignalsRepository;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
+import app.goodbuy.core.ingredients.scoring.IngredientScoringEngine;
+import app.goodbuy.core.ingredients.scoring.IngredientSignals;
 import app.goodbuy.core.ingredients.scoring.IngredientScoreResult;
 import app.goodbuy.core.products.scoring.ProductScoreResult;
 import app.goodbuy.core.products.scoring.ProductScoringEngine;
@@ -25,6 +27,7 @@ public class ProductScoringAdapterService {
     private static final Logger log = LoggerFactory.getLogger(ProductScoringAdapterService.class);
 
     private final ProductScoringEngine engine = new ProductScoringEngine();
+    private final IngredientScoringEngine ingredientScoringEngine = new IngredientScoringEngine();
     private final IngredientSignalsRepository signalsRepo;
 
     @PersistenceContext
@@ -153,31 +156,30 @@ public class ProductScoringAdapterService {
         IngredientSignalsEntity s = signalsRepo.findById(ing.getId()).orElse(null);
         if (s == null) return false;
 
-        // Only derive from PubChem signals if they exist (your current rule)
-        boolean mut = s.isPubchemMutagen();
-        boolean rep = s.isPubchemReproductiveToxin();
+        IngredientSignals signals = new IngredientSignals(
+                s.getIarcGroup() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getIarcGroup()),
+                s.getEwgScore() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getEwgScore()),
+                s.isProp65Listed(),
+                s.isEuProhibited(),
+                s.isEuRestricted(),
+                s.isPubchemMutagen(),
+                s.isPubchemReproductiveToxin(),
+                s.isEpaChronicToxicity(),
+                s.isSkinIrritant()
+        );
 
-        DerivedScore derived = deriveFromPubChem(mut, rep);
+        IngredientScoreResult derived = ingredientScoringEngine.score(signals);
 
-        ing.setSafetyScore(BigDecimal.valueOf(derived.score()));
-        ing.setRatingLetter(derived.letter());
+        ing.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
+        ing.setRatingLetter(derived.ratingLetter());
 
         // No explicit save() needed: ing is managed via ProductEntity graph in this TX.
         // But forcing flush helps you see it immediately.
         em.flush();
 
         log.info("Ingredient score derived from signals ingredientId={} mutagen={} reproToxin={} => score={} letter={}",
-                ing.getId(), mut, rep, derived.score(), derived.letter());
+                ing.getId(), s.isPubchemMutagen(), s.isPubchemReproductiveToxin(), derived.safetyScore(), derived.ratingLetter());
 
         return true;
     }
-
-    private static DerivedScore deriveFromPubChem(boolean mutagen, boolean reproToxin) {
-        if (mutagen || reproToxin) {
-            return new DerivedScore(80, "D");
-        }
-        return new DerivedScore(20, "A");
-    }
-
-    private record DerivedScore(int score, String letter) {}
 }

@@ -2,9 +2,11 @@ package app.goodbuy.adapters.core.products.snapshot;
 
 import app.goodbuy.adapters.core.citations.service.IngredientCitationWriter;
 import app.goodbuy.adapters.core.ingredients.model.Ingredient;
+import app.goodbuy.adapters.core.ingredients.model.IngredientAlias;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.adapters.core.ingredients.service.IngredientSignalsWriter;
 import app.goodbuy.adapters.core.ingredients.service.MissingIngredientReportService;
+import app.goodbuy.adapters.core.notifications.SlackNotificationAdapter;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
 import app.goodbuy.adapters.core.products.model.ProductIngredientEntity;
 import app.goodbuy.adapters.core.products.repo.ProductIngredientRepository;
@@ -13,6 +15,7 @@ import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
 import app.goodbuy.core.ingredients.port.IngredientAutoEnricherPort;
 import app.goodbuy.core.ingredients.port.IngredientEnrichmentRequest;
 import app.goodbuy.core.ingredients.port.IngredientEnrichmentResult;
+import app.goodbuy.core.products.StrictProductIngestionException;
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductDomainConfigPort;
@@ -32,14 +35,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Component
@@ -68,6 +72,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private final ProductDomainConfigPort domainConfig;
     private final ProductScoringAdapterService productScoringAdapter;
     private final MissingIngredientReportService missingIngredientReportService;
+    private final SlackNotificationAdapter slackNotificationAdapter;
 
     private final IngredientCitationWriter citationWriter;
     private final IngredientSignalsWriter signalsWriter;
@@ -89,6 +94,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             ProductDomainConfigPort domainConfig,
             ProductScoringAdapterService productScoringAdapter,
             MissingIngredientReportService missingIngredientReportService,
+            SlackNotificationAdapter slackNotificationAdapter,
             IngredientCitationWriter citationWriter,
             IngredientSignalsWriter signalsWriter,
             Optional<IngredientAutoEnricherPort> autoEnricher
@@ -101,6 +107,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         this.domainConfig = domainConfig;
         this.productScoringAdapter = productScoringAdapter;
         this.missingIngredientReportService = missingIngredientReportService;
+        this.slackNotificationAdapter = slackNotificationAdapter;
         this.citationWriter = citationWriter;
         this.signalsWriter = signalsWriter;
         this.autoEnricher = autoEnricher.orElse(null);
@@ -199,8 +206,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         List<ProductDetailDto.IngredientDto> dtoIngredients = dto.ingredients();
         if (dtoIngredients == null || dtoIngredients.isEmpty()) {
-            log.info("saveSnapshot: no ingredients for gtin={} — DONE", ean14);
-            return;
+            throw new StrictProductIngestionException("External catalog returned no ingredient list for product " + ean14);
         }
 
         if (!isNew && product.getId() != null) {
@@ -281,10 +287,17 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
 
         try {
-            Object scoreResult = productScoringAdapter.scoreProduct(product);
+            var scoreResult = productScoringAdapter.scoreProduct(product);
             log.info("saveSnapshot: product score computed gtin={} result={}", ean14, scoreResult);
+            if ("NR".equalsIgnoreCase(scoreResult.ratingLetter())) {
+                throw new StrictProductIngestionException("Product " + ean14 + " is still unrated after ingestion.");
+            }
         } catch (Exception ex) {
+            if (ex instanceof StrictProductIngestionException strict) {
+                throw strict;
+            }
             log.warn("saveSnapshot: product scoring FAILED for gtin={} err={}", ean14, ex.toString());
+            throw new StrictProductIngestionException("Product scoring failed for " + ean14, ex);
         }
     }
 
@@ -315,6 +328,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             if (shouldAttemptEnrichmentOnExisting(ingredient) && autoEnricher != null) {
                 tryEnrichExistingIngredient(ingredient, canonicalKey, displayName, productEan, externalIds);
             }
+            assertIngredientStrictlyReady(ingredient, canonicalKey, productEan);
             return ingredient;
         }
 
@@ -357,70 +371,29 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             }
         }
 
-        String finalDisplayName = displayName;
-        String finalSummary = null;
-        String finalCategory = null;
-
-        List<String> citationUrls = null;
-        String citationSourceName = null;
-        String citationTitle = null;
-
-        if (providerEnriched && enr != null) {
-            if (enr.displayName() != null && !enr.displayName().isBlank()) finalDisplayName = enr.displayName();
-            finalSummary = enr.summary();
-            finalCategory = enr.category();
-
-            citationUrls = enr.sourceUrls();
-            citationSourceName = enr.provider();
-            citationTitle = enr.citationTitle();
+        if (!providerEnriched || enr == null) {
+            notifyIngredientAttention(
+                    canonicalKey,
+                    displayName,
+                    productEan,
+                    "OpenAI enrichment returned no structured ingredient profile."
+            );
+            throw new StrictProductIngestionException(
+                    "Ingredient enrichment failed for '" + displayName + "' (" + canonicalKey + ")."
+            );
         }
 
         Ingredient created = new Ingredient();
         created.setCanonicalKey(canonicalKey);
-        created.setDisplayName(finalDisplayName);
         created.setActive(true);
-
-        if (finalSummary != null && !finalSummary.isBlank()) created.setSummary(finalSummary);
-        if (finalCategory != null && !finalCategory.isBlank()) created.setCategory(finalCategory);
-
+        applyEnrichmentToIngredient(created, enr, displayName);
         ingredient = ingredientRepo.save(created);
-
-        boolean dbSignalsWritten = false;
-        boolean isPubChem = (providerEnriched && enr != null && PROVIDER_PUBCHEM.equalsIgnoreCase(enr.provider()));
-
-        if (providerEnriched && citationUrls != null && !citationUrls.isEmpty()) {
-            String src = (citationSourceName == null || citationSourceName.isBlank()) ? "Unknown" : citationSourceName.trim();
-            try {
-                citationWriter.attachCitations(ingredient.getId(), src, citationUrls, citationTitle);
-            } catch (Exception ex) {
-                log.warn("resolveOrCreateIngredient: attach citations failed ingredientId={} canonicalKey='{}' err={}",
-                        ingredient.getId(), canonicalKey, ex.toString());
-            }
-        }
-
-        if (isPubChem && enr != null) {
-            Boolean mut = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_MUTAGEN);
-            Boolean rep = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_REPRO);
-
-            if (mut == null && externalIds != null) mut = parseBooleanLoose(externalIds.get("pubchem_mutagen"));
-            if (rep == null && externalIds != null) rep = parseBooleanLoose(externalIds.get("pubchem_reproductive_toxin"));
-
-            if (mut != null && rep != null) {
-                try {
-                    dbSignalsWritten = signalsWriter.upsertPubChemSignals(ingredient.getId(), mut, rep);
-                } catch (Exception ex) {
-                    dbSignalsWritten = false;
-                    log.warn("resolveOrCreateIngredient: PUBCHEM signal upsert FAILED ingredientId={} err={}",
-                            ingredient.getId(), ex.toString());
-                }
-            }
-        }
-
-        boolean dbEnriched = providerEnriched && (!isPubChem || dbSignalsWritten);
+        attachCitations(ingredient, canonicalKey, enr);
+        boolean dbEnriched = writeSignalsAndScore(ingredient, canonicalKey, productEan, enr);
 
         try {
             missingIngredientReportService.reportWithStatus(
-                    finalDisplayName,
+                    ingredient.getDisplayName(),
                     productEan,
                     "backend-ingestion",
                     "backend",
@@ -432,18 +405,16 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             );
         } catch (Exception ex) {
             log.warn("Failed to record missing ingredient report for '{}' (ean={}): {}",
-                    finalDisplayName, productEan, ex.getMessage(), ex);
+                    ingredient.getDisplayName(), productEan, ex.getMessage(), ex);
         }
 
+        ingredient = ingredientRepo.saveAndFlush(ingredient);
+        assertIngredientStrictlyReady(ingredient, canonicalKey, productEan);
         return ingredient;
     }
 
     private boolean shouldAttemptEnrichmentOnExisting(Ingredient i) {
-        return isBlank(i.getSummary())
-                && isBlank(i.getCategory())
-                && isBlank(i.getDescription())
-                && isBlank(i.getFuncUse())
-                && isBlank(i.getConcerns());
+        return !isIngredientStrictlyReady(i);
     }
 
     private void tryEnrichExistingIngredient(
@@ -477,61 +448,10 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         if (!providerEnriched || enr == null) return;
 
-        boolean updated = false;
-
-        if (!isBlank(enr.displayName()) && !enr.displayName().equalsIgnoreCase(ingredient.getDisplayName())) {
-            ingredient.setDisplayName(enr.displayName().trim());
-            updated = true;
-        }
-        if (isBlank(ingredient.getSummary()) && !isBlank(enr.summary())) {
-            ingredient.setSummary(enr.summary().trim());
-            updated = true;
-        }
-        if (isBlank(ingredient.getCategory()) && !isBlank(enr.category())) {
-            ingredient.setCategory(enr.category().trim());
-            updated = true;
-        }
-
-        if (updated) {
-            ingredientRepo.save(ingredient);
-        }
-
-        if (enr.sourceUrls() != null && !enr.sourceUrls().isEmpty()) {
-            try {
-                citationWriter.attachCitations(
-                        ingredient.getId(),
-                        (isBlank(enr.provider()) ? "Unknown" : enr.provider().trim()),
-                        enr.sourceUrls(),
-                        enr.citationTitle()
-                );
-            } catch (Exception ex) {
-                log.warn("resolveOrCreateIngredient: existing ingredient attach citations FAILED ingredientId={} err={}",
-                        ingredient.getId(), ex.toString());
-            }
-        }
-
-        boolean dbSignalsWritten = false;
-        boolean isPubChem = (enr.provider() != null && PROVIDER_PUBCHEM.equalsIgnoreCase(enr.provider()));
-
-        if (isPubChem) {
-            Boolean mut = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_MUTAGEN);
-            Boolean rep = extractBooleanFromNote(enr.note(), NOTE_PUBCHEM_REPRO);
-
-            if (mut == null && externalIds != null) mut = parseBooleanLoose(externalIds.get("pubchem_mutagen"));
-            if (rep == null && externalIds != null) rep = parseBooleanLoose(externalIds.get("pubchem_reproductive_toxin"));
-
-            if (mut != null && rep != null) {
-                try {
-                    dbSignalsWritten = signalsWriter.upsertPubChemSignals(ingredient.getId(), mut, rep);
-                } catch (Exception ex) {
-                    dbSignalsWritten = false;
-                    log.warn("resolveOrCreateIngredient: existing ingredient PUBCHEM signal upsert FAILED ingredientId={} err={}",
-                            ingredient.getId(), ex.toString());
-                }
-            }
-        }
-
-        boolean dbEnriched = !isPubChem || dbSignalsWritten;
+        applyEnrichmentToIngredient(ingredient, enr, displayName);
+        ingredientRepo.saveAndFlush(ingredient);
+        attachCitations(ingredient, canonicalKey, enr);
+        boolean dbEnriched = writeSignalsAndScore(ingredient, canonicalKey, productEan, enr);
 
         try {
             missingIngredientReportService.reportWithStatus(
@@ -547,24 +467,176 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             log.warn("Failed to record missing ingredient report for existing ingredient '{}' (ean={}): {}",
                     ingredient.getDisplayName(), productEan, ex.getMessage(), ex);
         }
+
+        ingredientRepo.saveAndFlush(ingredient);
+        assertIngredientStrictlyReady(ingredient, canonicalKey, productEan);
     }
 
-    private static Boolean extractBooleanFromNote(String note, Pattern p) {
-        if (note == null) return null;
-        Matcher m = p.matcher(note);
-        if (!m.find()) return null;
-        String v = m.group(1);
-        if (v == null) return null;
-        return Boolean.parseBoolean(v.trim().toLowerCase(Locale.ROOT));
+    private void applyEnrichmentToIngredient(Ingredient ingredient, IngredientEnrichmentResult enrichment, String fallbackDisplayName) {
+        ingredient.setDisplayName(firstNonBlank(enrichment.displayName(), fallbackDisplayName, ingredient.getDisplayName(), ingredient.getCanonicalKey()));
+        ingredient.setSummary(firstNonBlank(enrichment.summary(), ingredient.getSummary()));
+        ingredient.setDescription(firstNonBlank(enrichment.description(), ingredient.getDescription()));
+        ingredient.setFuncUse(firstNonBlank(enrichment.functionUse(), ingredient.getFuncUse()));
+        ingredient.setConcerns(firstNonBlank(enrichment.concerns(), ingredient.getConcerns()));
+        ingredient.setCategory(firstNonBlank(enrichment.category(), ingredient.getCategory()));
+        ingredient.setRegulationNotes(firstNonBlank(enrichment.regulationNotes(), ingredient.getRegulationNotes()));
+        ingredient.setReferencesCount(
+                enrichment.referencesCount() != null
+                        ? enrichment.referencesCount()
+                        : Math.max(
+                                ingredient.getReferencesCount() == null ? 0 : ingredient.getReferencesCount(),
+                                enrichment.sourceUrls() == null ? 0 : enrichment.sourceUrls().size()
+                        )
+        );
+        mergeAliases(ingredient, enrichment.aliases());
+        mergeTags(ingredient, enrichment.tags());
     }
 
-    private static Boolean parseBooleanLoose(String s) {
-        if (s == null) return null;
-        String x = s.trim().toLowerCase(Locale.ROOT);
-        if (x.isBlank()) return null;
-        if (x.equals("true") || x.equals("t") || x.equals("1") || x.equals("yes") || x.equals("y")) return true;
-        if (x.equals("false") || x.equals("f") || x.equals("0") || x.equals("no") || x.equals("n")) return false;
-        return null;
+    private void mergeAliases(Ingredient ingredient, List<String> aliases) {
+        if (aliases == null || aliases.isEmpty()) return;
+
+        Set<String> existing = ingredient.getAliases().stream()
+                .map(IngredientAlias::getAlias)
+                .filter(Objects::nonNull)
+                .map(DbProductSnapshotAdapter::normalizeCanonicalKey)
+                .collect(java.util.stream.Collectors.toSet());
+
+        for (String alias : aliases) {
+            String normalized = normalizeCanonicalKey(alias);
+            if (normalized.isBlank()) continue;
+            if (normalized.equals(normalizeCanonicalKey(ingredient.getCanonicalKey()))) continue;
+            if (!existing.add(normalized)) continue;
+
+            IngredientAlias row = new IngredientAlias();
+            row.setIngredient(ingredient);
+            row.setAlias(alias.trim());
+            ingredient.getAliases().add(row);
+        }
+    }
+
+    private void mergeTags(Ingredient ingredient, List<String> tags) {
+        if (tags == null || tags.isEmpty()) return;
+
+        Set<String> merged = new java.util.LinkedHashSet<>();
+        if (ingredient.getTags() != null) {
+            ingredient.getTags().stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(s -> !s.isBlank())
+                    .forEach(merged::add);
+        }
+        tags.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(s -> !s.isBlank())
+                .forEach(merged::add);
+        ingredient.setTags(new ArrayList<>(merged));
+    }
+
+    private void attachCitations(Ingredient ingredient, String canonicalKey, IngredientEnrichmentResult enrichment) {
+        if (ingredient == null || ingredient.getId() == null) return;
+        if (enrichment == null || enrichment.sourceUrls() == null || enrichment.sourceUrls().isEmpty()) return;
+
+        String src = isBlank(enrichment.provider()) ? "Unknown" : enrichment.provider().trim();
+        try {
+            citationWriter.attachCitations(ingredient.getId(), src, enrichment.sourceUrls(), enrichment.citationTitle());
+        } catch (Exception ex) {
+            log.warn("resolveOrCreateIngredient: attach citations failed ingredientId={} canonicalKey='{}' err={}",
+                    ingredient.getId(), canonicalKey, ex.toString());
+        }
+    }
+
+    private boolean writeSignalsAndScore(
+            Ingredient ingredient,
+            String canonicalKey,
+            String productEan,
+            IngredientEnrichmentResult enrichment
+    ) {
+        try {
+            boolean written = signalsWriter.upsertSignalsAndScore(ingredient.getId(), enrichment);
+            if (!written) {
+                notifyIngredientAttention(
+                        canonicalKey,
+                        ingredient.getDisplayName(),
+                        productEan,
+                        "Signal persistence/scoring did not complete."
+                );
+                throw new StrictProductIngestionException(
+                        "Ingredient scoring failed for '" + ingredient.getDisplayName() + "' (" + canonicalKey + ")."
+                );
+            }
+            return true;
+        } catch (StrictProductIngestionException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            notifyIngredientAttention(
+                    canonicalKey,
+                    ingredient.getDisplayName(),
+                    productEan,
+                    "Signal persistence/scoring threw " + ex.getClass().getSimpleName() + ": " + ex.getMessage()
+            );
+            throw new StrictProductIngestionException(
+                    "Ingredient scoring failed for '" + ingredient.getDisplayName() + "' (" + canonicalKey + ").",
+                    ex
+            );
+        }
+    }
+
+    private void assertIngredientStrictlyReady(Ingredient ingredient, String canonicalKey, String productEan) {
+        if (ingredient != null && isIngredientStrictlyReady(ingredient)) {
+            return;
+        }
+
+        String missing = ingredient == null ? "ingredient_row_missing" : String.join(", ", missingIngredientFields(ingredient));
+        notifyIngredientAttention(canonicalKey, ingredient == null ? canonicalKey : ingredient.getDisplayName(), productEan, missing);
+        throw new StrictProductIngestionException(
+                "Ingredient '" + canonicalKey + "' is not complete after ingestion: " + missing
+        );
+    }
+
+    private boolean isIngredientStrictlyReady(Ingredient ingredient) {
+        return ingredient != null
+                && !isBlank(ingredient.getDisplayName())
+                && !isBlank(ingredient.getSummary())
+                && !isBlank(ingredient.getDescription())
+                && !isBlank(ingredient.getFuncUse())
+                && !isBlank(ingredient.getConcerns())
+                && !isBlank(ingredient.getCategory())
+                && !isBlank(ingredient.getRegulationNotes())
+                && ingredient.getReferencesCount() != null
+                && ingredient.getSafetyScore() != null
+                && !isBlank(ingredient.getRatingLetter());
+    }
+
+    private List<String> missingIngredientFields(Ingredient ingredient) {
+        List<String> missing = new ArrayList<>();
+        if (isBlank(ingredient.getDisplayName())) missing.add("display_name");
+        if (isBlank(ingredient.getSummary())) missing.add("summary");
+        if (isBlank(ingredient.getDescription())) missing.add("description");
+        if (isBlank(ingredient.getFuncUse())) missing.add("func_use");
+        if (isBlank(ingredient.getConcerns())) missing.add("concerns");
+        if (isBlank(ingredient.getCategory())) missing.add("category");
+        if (isBlank(ingredient.getRegulationNotes())) missing.add("regulation_notes");
+        if (ingredient.getReferencesCount() == null) missing.add("references_count");
+        if (ingredient.getSafetyScore() == null) missing.add("safety_score");
+        if (isBlank(ingredient.getRatingLetter())) missing.add("rating_letter");
+        return missing;
+    }
+
+    private void notifyIngredientAttention(String canonicalKey, String displayName, String productEan, String reason) {
+        String message = """
+                :rotating_light: Ingredient needs manual enrichment
+                product_ean: %s
+                canonical_key: %s
+                display_name: %s
+                reason: %s
+                """.formatted(
+                safe(productEan),
+                safe(canonicalKey),
+                safe(displayName),
+                safe(reason)
+        );
+        slackNotificationAdapter.sendIngredientMissing(message);
     }
 
     private String mirrorExternalImageToS3(String ean14, String externalUrl) throws Exception {

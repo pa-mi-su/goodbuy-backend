@@ -4,12 +4,17 @@ import app.goodbuy.adapters.core.ingredients.model.Ingredient;
 import app.goodbuy.adapters.core.ingredients.model.IngredientSignalsEntity;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientRepository;
 import app.goodbuy.adapters.core.ingredients.repository.IngredientSignalsRepository;
+import app.goodbuy.core.ingredients.port.IngredientEnrichmentResult;
+import app.goodbuy.core.ingredients.scoring.IngredientScoreResult;
+import app.goodbuy.core.ingredients.scoring.IngredientScoringEngine;
+import app.goodbuy.core.ingredients.scoring.IngredientSignals;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 @Service
 public class IngredientSignalsWriter {
@@ -18,44 +23,40 @@ public class IngredientSignalsWriter {
 
     private final IngredientSignalsRepository signalsRepo;
     private final IngredientRepository ingredientRepo;
+    private final IngredientScoringEngine scoringEngine = new IngredientScoringEngine();
 
     public IngredientSignalsWriter(IngredientSignalsRepository signalsRepo, IngredientRepository ingredientRepo) {
         this.signalsRepo = signalsRepo;
         this.ingredientRepo = ingredientRepo;
     }
 
-    /**
-     * JPA "upsert" (portable, no JDBC):
-     * - lock+load row if it exists
-     * - if absent, create new row with PK = ingredientId
-     * - update flags
-     * - flush signals row
-     * - THEN update Ingredient.safety_score + rating_letter (Option B)
-     *
-     * Returns true only when both:
-     *  - ingredient_signals row exists after flush
-     *  - ingredient row exists and was updated with a derived score
-     */
     @Transactional
-    public boolean upsertPubChemSignals(long ingredientId, boolean pubchemMutagen, boolean pubchemReproductiveToxin) {
+    public boolean upsertSignalsAndScore(long ingredientId, IngredientEnrichmentResult enrichment) {
+        if (enrichment == null) {
+            return false;
+        }
 
         IngredientSignalsEntity entity = signalsRepo.findByIngredientIdForUpdate(ingredientId)
                 .orElseGet(() -> new IngredientSignalsEntity(ingredientId));
 
-        entity.setPubchemMutagen(pubchemMutagen);
-        entity.setPubchemReproductiveToxin(pubchemReproductiveToxin);
+        if (enrichment.iarcGroup() != null) entity.setIarcGroup(enrichment.iarcGroup());
+        if (enrichment.prop65Listed() != null) entity.setProp65Listed(enrichment.prop65Listed());
+        if (enrichment.ewgScore() != null) entity.setEwgScore(enrichment.ewgScore());
+        if (enrichment.euProhibited() != null) entity.setEuProhibited(enrichment.euProhibited());
+        if (enrichment.euRestricted() != null) entity.setEuRestricted(enrichment.euRestricted());
+        if (enrichment.pubchemMutagen() != null) entity.setPubchemMutagen(enrichment.pubchemMutagen());
+        if (enrichment.pubchemReproductiveToxin() != null) entity.setPubchemReproductiveToxin(enrichment.pubchemReproductiveToxin());
+        if (enrichment.epaChronicToxicity() != null) entity.setEpaChronicToxicity(enrichment.epaChronicToxicity());
+        if (enrichment.skinIrritant() != null) entity.setSkinIrritant(enrichment.skinIrritant());
 
-        // 1) Force SQL for signals now
         signalsRepo.saveAndFlush(entity);
 
         boolean signalsExist = signalsRepo.existsById(ingredientId);
         if (!signalsExist) {
-            log.error("IngredientSignalsWriter: signals NOT FOUND AFTER FLUSH ingredientId={} mutagen={} reproToxin={}",
-                    ingredientId, pubchemMutagen, pubchemReproductiveToxin);
+            log.error("IngredientSignalsWriter: signals NOT FOUND AFTER FLUSH ingredientId={}", ingredientId);
             return false;
         }
 
-        // 2) Option B: write derived score/letter into ingredients
         Ingredient ingredient = ingredientRepo.findByIdForUpdate(ingredientId).orElse(null);
         if (ingredient == null) {
             log.error("IngredientSignalsWriter: ingredient NOT FOUND ingredientId={} (cannot apply derived score)",
@@ -63,30 +64,61 @@ public class IngredientSignalsWriter {
             return false;
         }
 
-        DerivedScore derived = deriveFromPubChem(pubchemMutagen, pubchemReproductiveToxin);
+        IngredientSignals signals = new IngredientSignals(
+                entity.getIarcGroup() == null ? java.util.Optional.empty() : java.util.Optional.of((int) entity.getIarcGroup()),
+                entity.getEwgScore() == null ? java.util.Optional.empty() : java.util.Optional.of((int) entity.getEwgScore()),
+                entity.isProp65Listed(),
+                entity.isEuProhibited(),
+                entity.isEuRestricted(),
+                entity.isPubchemMutagen(),
+                entity.isPubchemReproductiveToxin(),
+                entity.isEpaChronicToxicity(),
+                entity.isSkinIrritant()
+        );
 
-        ingredient.setSafetyScore(BigDecimal.valueOf(derived.score()));
-        ingredient.setRatingLetter(derived.letter());
+        IngredientScoreResult derived = scoringEngine.score(signals);
+
+        ingredient.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
+        ingredient.setRatingLetter(derived.ratingLetter());
 
         ingredientRepo.saveAndFlush(ingredient);
 
-        log.info("IngredientSignalsWriter: CONFIRMED ingredientId={} mutagen={} reproToxin={} => score={} letter={}",
-                ingredientId, pubchemMutagen, pubchemReproductiveToxin, derived.score(), derived.letter());
+        log.info("IngredientSignalsWriter: CONFIRMED ingredientId={} => score={} letter={}",
+                ingredientId, derived.safetyScore(), derived.ratingLetter());
 
         return true;
     }
 
-    /**
-     * Centralized scoring rule for PubChem flags (matches your SQL test):
-     * - if mutagen OR reproductive_toxin => 80 / D
-     * - else => 20 / A
-     */
-    private static DerivedScore deriveFromPubChem(boolean mutagen, boolean reproToxin) {
-        if (mutagen || reproToxin) {
-            return new DerivedScore(80, "D");
-        }
-        return new DerivedScore(20, "A");
+    @Transactional
+    public boolean upsertPubChemSignals(long ingredientId, boolean pubchemMutagen, boolean pubchemReproductiveToxin) {
+        return upsertSignalsAndScore(
+                ingredientId,
+                new IngredientEnrichmentResult(
+                        true,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        "PUBCHEM",
+                        null,
+                        "pubchem_only",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        pubchemMutagen,
+                        pubchemReproductiveToxin,
+                        null,
+                        null
+                )
+        );
     }
-
-    private record DerivedScore(int score, String letter) {}
 }

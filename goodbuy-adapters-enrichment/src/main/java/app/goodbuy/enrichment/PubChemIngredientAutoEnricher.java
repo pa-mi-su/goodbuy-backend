@@ -758,7 +758,14 @@ public class PubChemIngredientAutoEnricher implements IngredientAutoEnricherPort
                 false,
                 null,     // displayName
                 null,     // summary
+                null,     // description
+                null,     // functionUse
+                null,     // concerns
                 null,     // category
+                null,     // regulationNotes
+                null,     // referencesCount
+                List.of(),// aliases
+                List.of(),// tags
                 null,     // sourceUrls
                 PROVIDER, // provider
                 null,     // citationTitle
@@ -789,7 +796,14 @@ public class PubChemIngredientAutoEnricher implements IngredientAutoEnricherPort
                 true,
                 displayName,
                 summary,
+                summary,
+                null,
+                null,
                 category,
+                null,
+                sourceUrls == null ? 0 : sourceUrls.size(),
+                List.of(),
+                List.of(),
                 sourceUrls,
                 PROVIDER,
                 citationTitle,
