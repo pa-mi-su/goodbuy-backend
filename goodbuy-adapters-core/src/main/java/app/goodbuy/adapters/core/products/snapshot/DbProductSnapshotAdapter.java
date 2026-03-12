@@ -16,6 +16,7 @@ import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
 import app.goodbuy.core.ingredients.port.IngredientAutoEnricherPort;
 import app.goodbuy.core.ingredients.port.IngredientEnrichmentRequest;
 import app.goodbuy.core.ingredients.port.IngredientEnrichmentResult;
+import app.goodbuy.core.ingredients.port.IngredientEnrichmentQueuePort;
 import app.goodbuy.core.products.StrictProductIngestionException;
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
@@ -79,6 +80,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     private final IngredientCitationWriter citationWriter;
     private final IngredientSignalsWriter signalsWriter;
+    private final IngredientEnrichmentQueuePort ingredientResearchQueue;
 
     // Optional: only present if auto-enrichment is enabled + wired
     private final IngredientAutoEnricherPort autoEnricher; // may be null
@@ -101,6 +103,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             SlackNotificationAdapter slackNotificationAdapter,
             IngredientCitationWriter citationWriter,
             IngredientSignalsWriter signalsWriter,
+            Optional<IngredientEnrichmentQueuePort> ingredientResearchQueue,
             Optional<IngredientAutoEnricherPort> autoEnricher
     ) {
         this.productRepo = productRepo;
@@ -115,6 +118,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         this.slackNotificationAdapter = slackNotificationAdapter;
         this.citationWriter = citationWriter;
         this.signalsWriter = signalsWriter;
+        this.ingredientResearchQueue = ingredientResearchQueue.orElse(null);
         this.autoEnricher = autoEnricher.orElse(null);
 
         log.info("DbProductSnapshotAdapter wiring: autoEnricher={}",
@@ -279,6 +283,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             link = productIngredientRepo.save(link);
             product.getProductIngredients().add(link);
 
+            enqueueDeepResearchIfNeeded(ingredient, ean14, "scan_ingestion");
             linked++;
         }
 
@@ -434,6 +439,16 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     private boolean shouldAttemptEnrichmentOnExisting(Ingredient i) {
         return !isIngredientStrictlyReady(i);
+    }
+
+    private void enqueueDeepResearchIfNeeded(Ingredient ingredient, String productEan, String reason) {
+        if (ingredientResearchQueue == null || ingredient == null || ingredient.getId() == null) {
+            return;
+        }
+        if (!shouldAttemptEnrichmentOnExisting(ingredient)) {
+            return;
+        }
+        ingredientResearchQueue.enqueue(ingredient.getId(), reason + ":" + safe(productEan));
     }
 
     private void tryEnrichExistingIngredient(

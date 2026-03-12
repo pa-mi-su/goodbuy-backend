@@ -27,9 +27,14 @@ public class IngredientController {
     private static final int BATCH_LIMIT = 200;
 
     private final IngredientReadService service;
+    private final IngredientOnDemandResearchService onDemandResearchService;
 
-    public IngredientController(IngredientReadService service) {
+    public IngredientController(
+            IngredientReadService service,
+            IngredientOnDemandResearchService onDemandResearchService
+    ) {
         this.service = service;
+        this.onDemandResearchService = onDemandResearchService;
     }
 
     // A) GET /api/ingredients?q=Raw Name With Spaces
@@ -61,13 +66,7 @@ public class IngredientController {
             throw new ResponseStatusException(UNPROCESSABLE_ENTITY, "invalid_ingredient_name");
         }
 
-        return service.searchRanked(query)
-                .orElseThrow(() ->
-                        new ResponseStatusException(
-                                NOT_FOUND,
-                                "Ingredient not found: " + query
-                        )
-                );
+        return onDemandResearchService.getOrStartResearch(query);
     }
 
     // POST /api/ingredients/_batch
