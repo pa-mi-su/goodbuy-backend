@@ -150,10 +150,13 @@ public record ProductView(
         // ── Product-level scoring ─────────────────────────────────────────────
         BigDecimal productScore = dto.safetyScore();
         String productRating    = dto.ratingLetter();
+        long totalIngredients = ingredientViews.size();
+        long catalogIngredients = ingredientViews.stream()
+                .filter(ProductIngredientView::inCatalog)
+                .count();
+        double coverageRatio = totalIngredients == 0 ? 0.0 : (catalogIngredients / (double) totalIngredients);
 
         if (productScore == null && (productRating == null || productRating.isBlank()) && categorySupported) {
-            long totalIngredients = ingredientViews.size();
-
             // Only count ingredients that are "researched/details-present" AND have safetyScore.
             long ratedIngredients = ingredientViews.stream()
                     .filter(ProductIngredientView::inCatalog)
@@ -197,6 +200,10 @@ public record ProductView(
             } else if (missingIngredientList) {
                 scoringStatus = "missing_ingredient_list";
                 scoringMessage = "This product listing does not include an ingredient list yet. We logged it for review.";
+            } else if (coverageRatio < 0.6d) {
+                scoringStatus = "needs_ingredient_evidence";
+                scoringMessage = "We only matched " + catalogIngredients + " of " + totalIngredients
+                        + " ingredients. Upload ingredient-label photos so we can seed the missing ones.";
             } else {
                 scoringStatus = "pending_ingredients";
                 scoringMessage = "We do not have all ingredients yet, so we cannot score this product. Check back soon.";

@@ -50,6 +50,9 @@ public class ProductEntity {
     @Column(name = "primary_image_s3_url")
     private String primaryImageS3Url;
 
+    @Column(name = "raw_ingredient_text")
+    private String rawIngredientText;
+
     /**
      * Overall GoodBuy safety score for this product.
      *
@@ -119,6 +122,9 @@ public class ProductEntity {
 
     public String getPrimaryImageS3Url() { return primaryImageS3Url; }
     public void setPrimaryImageS3Url(String primaryImageS3Url) { this.primaryImageS3Url = primaryImageS3Url; }
+
+    public String getRawIngredientText() { return rawIngredientText; }
+    public void setRawIngredientText(String rawIngredientText) { this.rawIngredientText = rawIngredientText; }
 
     public BigDecimal getSafetyScore() { return safetyScore; }
     public void setSafetyScore(BigDecimal safetyScore) { this.safetyScore = safetyScore; }
