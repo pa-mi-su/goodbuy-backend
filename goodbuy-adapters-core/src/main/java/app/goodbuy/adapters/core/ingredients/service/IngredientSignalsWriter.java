@@ -78,6 +78,14 @@ public class IngredientSignalsWriter {
 
         IngredientScoreResult derived = scoringEngine.score(ingredient.getCanonicalKey(), signals);
 
+        if (!derived.isRated() && hasEvidenceBackedNarrative(enrichment)) {
+            derived = new IngredientScoreResult(
+                    85,
+                    "B",
+                    List.of("Authoritative sources were found, but no explicit high-concern hazard flags were identified in the current evidence set.")
+            );
+        }
+
         if (derived.isRated()) {
             ingredient.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
             ingredient.setRatingLetter(derived.ratingLetter());
@@ -92,6 +100,26 @@ public class IngredientSignalsWriter {
                 ingredientId, derived.safetyScore(), derived.ratingLetter());
 
         return true;
+    }
+
+    private boolean hasEvidenceBackedNarrative(IngredientEnrichmentResult enrichment) {
+        if (enrichment == null || !enrichment.enriched()) {
+            return false;
+        }
+
+        boolean hasNarrative = notBlank(enrichment.summary())
+                || notBlank(enrichment.description())
+                || notBlank(enrichment.functionUse())
+                || notBlank(enrichment.concerns());
+
+        boolean hasSources = (enrichment.referencesCount() != null && enrichment.referencesCount() > 0)
+                || (enrichment.sourceUrls() != null && !enrichment.sourceUrls().isEmpty());
+
+        return hasNarrative && hasSources;
+    }
+
+    private boolean notBlank(String value) {
+        return value != null && !value.isBlank();
     }
 
     @Transactional

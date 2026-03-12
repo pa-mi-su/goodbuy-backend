@@ -249,15 +249,19 @@ public class OpenAiIngredientAutoEnricher implements IngredientAutoEnricherPort 
                 pubChemResult != null && !isBlank(pubChemResult.note())
                         ? "model=" + model + ";" + pubChemResult.note()
                         : "model=" + model,
-                null,
-                null,
-                null,
-                null,
-                null,
-                pubChemResult == null ? null : pubChemResult.pubchemMutagen(),
-                pubChemResult == null ? null : pubChemResult.pubchemReproductiveToxin(),
-                null,
-                null
+                openAi.iarcGroup(),
+                openAi.prop65Listed(),
+                openAi.ewgScore(),
+                openAi.euProhibited(),
+                openAi.euRestricted(),
+                pubChemResult != null && pubChemResult.pubchemMutagen() != null
+                        ? pubChemResult.pubchemMutagen()
+                        : openAi.pubchemMutagen(),
+                pubChemResult != null && pubChemResult.pubchemReproductiveToxin() != null
+                        ? pubChemResult.pubchemReproductiveToxin()
+                        : openAi.pubchemReproductiveToxin(),
+                openAi.epaChronicToxicity(),
+                openAi.skinIrritant()
         );
     }
 
