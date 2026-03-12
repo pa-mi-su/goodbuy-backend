@@ -17,7 +17,7 @@ import java.util.Locale;
  * Responsibilities:
  *   - Take free-text from upstream (category / title / brand)
  *   - Map it into one of a small, stable domains:
- *       CLEANING, BABY, FOOD, OTHER, UNKNOWN
+ *       vitamins, cleaning, baby, food, other, unknown
  *
  * Rules live in the product_domain_mapping table.
  *
@@ -114,7 +114,7 @@ public final class DbProductDomainResolver implements ProductDomainResolverPort 
                 continue;
             }
 
-            // 4) Rule matched: parse its domain string into our enum
+            // 4) Rule matched: parse its canonical lowercase domain code into our enum
             ProductDomain domain = parseExisting(rule.getDomain());
             if (domain != null) {
                 return domain;
@@ -133,13 +133,8 @@ public final class DbProductDomainResolver implements ProductDomainResolverPort 
         if (existingDomain == null || existingDomain.isBlank()) {
             return null;
         }
-        String normalized = existingDomain.trim().toUpperCase(Locale.ROOT);
-        try {
-            return ProductDomain.valueOf(normalized);
-        } catch (IllegalArgumentException ex) {
-            // Unknown / legacy domain string → treat as no-domain
-            return null;
-        }
+        ProductDomain parsed = ProductDomain.fromCode(existingDomain);
+        return parsed == ProductDomain.UNKNOWN ? ProductDomain.UNKNOWN : parsed;
     }
 
     private String normalize(String s) {
