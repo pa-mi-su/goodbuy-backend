@@ -1,6 +1,7 @@
 package app.goodbuy.products;
 
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.ingredients.IngredientOnDemandResearchService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
@@ -30,17 +31,20 @@ public class ProductService {
     private final ProductSnapshotPort snapshot;          // may be null
     private final AsyncProductIngestionService asyncIngestionService;
     private final ProductEvidenceReportService productEvidenceReportService;
+    private final IngredientOnDemandResearchService ingredientOnDemandResearchService;
 
     public ProductService(Optional<ExternalCatalogClient> external,
                           Optional<ProductLookupPort> lookup,
                           Optional<ProductSnapshotPort> snapshot,
                           AsyncProductIngestionService asyncIngestionService,
-                          Optional<ProductEvidenceReportService> productEvidenceReportService) {
+                          Optional<ProductEvidenceReportService> productEvidenceReportService,
+                          IngredientOnDemandResearchService ingredientOnDemandResearchService) {
         this.external = external.orElse(null);
         this.lookup = lookup.orElse(null);
         this.snapshot = snapshot.orElse(null);
         this.asyncIngestionService = asyncIngestionService;
         this.productEvidenceReportService = productEvidenceReportService.orElse(null);
+        this.ingredientOnDemandResearchService = ingredientOnDemandResearchService;
 
         log.info("ProductService wiring: external={}, lookup={}, snapshot={}",
                 this.external != null ? this.external.getClass().getSimpleName() : "<none>",
@@ -77,6 +81,7 @@ public class ProductService {
         }
         if (fromDbFirst != null) {
             reportLowCoverageIngredients(fromDbFirst);
+            queueIngredientResearch(fromDbFirst);
             log.info("ProductService.getByGtinOrNull: returning existing DB snapshot without re-enrichment gtin={} strictScored=false", code);
             return fromDbFirst;
         }
@@ -254,6 +259,25 @@ public class ProductService {
         } catch (Exception ex) {
             log.warn("ProductService.reportLowCoverageIngredients: failed gtin={} err={}", dto.gtin(), ex.toString());
         }
+    }
+
+    private void queueIngredientResearch(ProductDetailDto dto) {
+        if (dto == null || dto.ingredients() == null || dto.ingredients().isEmpty()) {
+            return;
+        }
+
+        dto.ingredients().stream()
+                .filter(java.util.Objects::nonNull)
+                .map(ing -> {
+                    if (ing.canonical() != null && !ing.canonical().isBlank()) return ing.canonical().trim();
+                    if (ing.original() != null && !ing.original().isBlank()) return ing.original().trim();
+                    if (ing.id() != null && !ing.id().isBlank()) return ing.id().trim();
+                    return null;
+                })
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .limit(100)
+                .forEach(ingredientOnDemandResearchService::getOrStartResearch);
     }
 
 }

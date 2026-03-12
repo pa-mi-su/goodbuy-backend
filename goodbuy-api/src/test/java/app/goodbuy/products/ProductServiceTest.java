@@ -1,5 +1,6 @@
 package app.goodbuy.products;
 
+import app.goodbuy.ingredients.IngredientOnDemandResearchService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
@@ -20,6 +21,7 @@ import static org.mockito.Mockito.when;
 class ProductServiceTest {
 
     private final AsyncProductIngestionService asyncIngestionService = mock(AsyncProductIngestionService.class);
+    private final IngredientOnDemandResearchService ingredientOnDemandResearchService = mock(IngredientOnDemandResearchService.class);
 
     @Test
     void returnsDbSnapshotWhenAlreadyStrictlyScored() {
@@ -28,7 +30,7 @@ class ProductServiceTest {
 
         when(lookup.findByGtin("00012345678901")).thenReturn(Optional.of(scored));
 
-        ProductService service = new ProductService(Optional.empty(), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty());
+        ProductService service = new ProductService(Optional.empty(), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty(), ingredientOnDemandResearchService);
 
         ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
@@ -45,7 +47,7 @@ class ProductServiceTest {
         when(lookup.findByGtin("00012345678901")).thenReturn(Optional.of(partial));
         when(external.findByGtin("00012345678901")).thenReturn(Optional.empty());
 
-        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty());
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty(), ingredientOnDemandResearchService);
 
         ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
@@ -61,7 +63,7 @@ class ProductServiceTest {
         when(lookup.findByGtin("00012345678901")).thenReturn(Optional.empty());
         when(external.findByGtin("00012345678901")).thenReturn(Optional.of(externalDto));
 
-        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty());
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.empty(), asyncIngestionService, Optional.empty(), ingredientOnDemandResearchService);
 
         ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
@@ -82,7 +84,7 @@ class ProductServiceTest {
                 .thenReturn(Optional.of(dbPartial));
         when(external.findByGtin("00012345678901")).thenReturn(Optional.of(externalDto));
 
-        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.of(snapshot), asyncIngestionService, Optional.empty());
+        ProductService service = new ProductService(Optional.of(external), Optional.of(lookup), Optional.of(snapshot), asyncIngestionService, Optional.empty(), ingredientOnDemandResearchService);
 
         ProductDetailDto result = service.getByGtinOrNull("00012345678901");
 
