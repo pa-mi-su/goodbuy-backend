@@ -76,10 +76,15 @@ public class IngredientSignalsWriter {
                 entity.isSkinIrritant()
         );
 
-        IngredientScoreResult derived = scoringEngine.score(signals);
+        IngredientScoreResult derived = scoringEngine.score(ingredient.getCanonicalKey(), signals);
 
-        ingredient.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
-        ingredient.setRatingLetter(derived.ratingLetter());
+        if (derived.isRated()) {
+            ingredient.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
+            ingredient.setRatingLetter(derived.ratingLetter());
+        } else {
+            ingredient.setSafetyScore(null);
+            ingredient.setRatingLetter(null);
+        }
 
         ingredientRepo.saveAndFlush(ingredient);
 

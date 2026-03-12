@@ -147,40 +147,8 @@ public record ProductView(
                     .toList();
         }
 
-        // ── Product-level scoring ─────────────────────────────────────────────
         BigDecimal productScore = dto.safetyScore();
         String productRating    = dto.ratingLetter();
-
-        if (productScore == null && (productRating == null || productRating.isBlank()) && categorySupported) {
-            long totalIngredients = ingredientViews.size();
-
-            // Only count ingredients that are "researched/details-present" AND have safetyScore.
-            long ratedIngredients = ingredientViews.stream()
-                    .filter(ProductIngredientView::inCatalog)
-                    .filter(iv -> iv.safetyScore() != null)
-                    .count();
-
-            boolean fullCoverage = totalIngredients > 0 && ratedIngredients == totalIngredients;
-
-            if (fullCoverage) {
-                for (ProductIngredientView iv : ingredientViews) {
-                    if (!iv.inCatalog()) continue;
-                    BigDecimal s = iv.safetyScore();
-                    if (s == null) continue;
-
-                    if (productScore == null || s.compareTo(productScore) < 0) {
-                        productScore = s;
-                        productRating = iv.ratingLetter();
-                    }
-                }
-                if (productRating == null || productRating.isBlank()) {
-                    productRating = "NR";
-                }
-            } else {
-                productScore = null;
-                productRating = "NR";
-            }
-        }
 
         String scoringStatus = "scored";
         String scoringMessage = null;
@@ -199,7 +167,7 @@ public record ProductView(
                 scoringMessage = "This product listing does not include an ingredient list yet. We logged it for review.";
             } else {
                 scoringStatus = "pending_ingredients";
-                scoringMessage = "We do not have all ingredients yet, so we cannot score this product. Check back soon.";
+                scoringMessage = "We do not yet have enough authoritative evidence to score every ingredient in this product.";
             }
         }
 

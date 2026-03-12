@@ -294,9 +294,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         try {
             var scoreResult = productScoringAdapter.scoreProduct(product);
             log.info("saveSnapshot: product score computed gtin={} result={}", ean14, scoreResult);
-            if ("NR".equalsIgnoreCase(scoreResult.ratingLetter())) {
-                throw new StrictProductIngestionException("Product " + ean14 + " is still unrated after ingestion.");
-            }
         } catch (Exception ex) {
             if (ex instanceof StrictProductIngestionException strict) {
                 throw strict;
@@ -625,9 +622,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                 && !isBlank(ingredient.getConcerns())
                 && !isBlank(ingredient.getCategory())
                 && !isBlank(ingredient.getRegulationNotes())
-                && ingredient.getReferencesCount() != null
-                && ingredient.getSafetyScore() != null
-                && !isBlank(ingredient.getRatingLetter());
+                && ingredient.getReferencesCount() != null;
     }
 
     private List<String> missingIngredientFields(Ingredient ingredient) {
@@ -640,8 +635,6 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         if (isBlank(ingredient.getCategory())) missing.add("category");
         if (isBlank(ingredient.getRegulationNotes())) missing.add("regulation_notes");
         if (ingredient.getReferencesCount() == null) missing.add("references_count");
-        if (ingredient.getSafetyScore() == null) missing.add("safety_score");
-        if (isBlank(ingredient.getRatingLetter())) missing.add("rating_letter");
         return missing;
     }
 
