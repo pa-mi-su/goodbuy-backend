@@ -67,4 +67,23 @@ class HistoryControllerTest {
         verify(repository).deleteAll(List.of(entity));
         verify(repository, never()).delete(entity);
     }
+
+    @Test
+    void deleteHistoryItemIsIdempotentWhenRowIsMissing() {
+        ScanHistoryRepository repository = mock(ScanHistoryRepository.class);
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        AppUserEntity user = new AppUserEntity();
+        UUID userId = UUID.randomUUID();
+        user.setId(userId);
+
+        when(request.getAttribute("goodbuyUser")).thenReturn(user);
+        when(repository.findByIdAndUserId(42L, userId)).thenReturn(Optional.empty());
+
+        HistoryController controller = new HistoryController(repository);
+
+        var response = controller.deleteHistoryItem(42L, request);
+
+        assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
+        verify(repository, never()).delete(any(ScanHistoryEntity.class));
+    }
 }

@@ -67,9 +67,14 @@ public class HistoryController {
     ) {
         UUID userId = requireAuthenticatedUserId(request);
 
-        ScanHistoryEntity entity = historyRepository.findByIdAndUserId(historyId, userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "history item not found"));
+        Optional<ScanHistoryEntity> entityOpt = historyRepository.findByIdAndUserId(historyId, userId);
+        if (entityOpt.isEmpty()) {
+            log.info("HistoryController.deleteHistoryItem: historyId={} already absent for userId={}",
+                    historyId, userId);
+            return ResponseEntity.noContent().build();
+        }
 
+        ScanHistoryEntity entity = entityOpt.get();
         historyRepository.delete(entity);
         log.info("HistoryController.deleteHistoryItem: deleted historyId={} userId={} ean={}",
                 historyId, userId, entity.getEan());
