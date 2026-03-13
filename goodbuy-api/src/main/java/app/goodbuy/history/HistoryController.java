@@ -58,6 +58,22 @@ public class HistoryController {
         return ResponseEntity.ok(dtos);
     }
 
+    @DeleteMapping("/{historyId}")
+    public ResponseEntity<Void> deleteHistoryItem(
+            @PathVariable Long historyId,
+            HttpServletRequest request
+    ) {
+        UUID userId = requireAuthenticatedUserId(request);
+
+        ScanHistoryEntity entity = historyRepository.findByIdAndUserId(historyId, userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "history item not found"));
+
+        historyRepository.delete(entity);
+        log.info("HistoryController.deleteHistoryItem: deleted historyId={} userId={} ean={}",
+                historyId, userId, entity.getEan());
+        return ResponseEntity.noContent().build();
+    }
+
     // ─────────────────────────────────────
     // POST: record a scan (auth via X-Session-Token)
     // ─────────────────────────────────────
