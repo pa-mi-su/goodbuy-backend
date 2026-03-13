@@ -8,6 +8,7 @@ import app.goodbuy.core.history.dto.ScanHistoryDTO;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -71,6 +73,33 @@ public class HistoryController {
         historyRepository.delete(entity);
         log.info("HistoryController.deleteHistoryItem: deleted historyId={} userId={} ean={}",
                 historyId, userId, entity.getEan());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/delete")
+    public ResponseEntity<Void> deleteHistoryItems(
+            @Valid @RequestBody DeleteHistoryItemsRequest requestBody,
+            HttpServletRequest request
+    ) {
+        UUID userId = requireAuthenticatedUserId(request);
+
+        List<Long> uniqueIds = requestBody.ids().stream()
+                .distinct()
+                .toList();
+
+        List<ScanHistoryEntity> entities = historyRepository.findAllByUserIdAndIdIn(userId, uniqueIds);
+        if (entities.isEmpty()) {
+            return ResponseEntity.noContent().build();
+        }
+
+        List<String> eans = new ArrayList<>(entities.size());
+        for (ScanHistoryEntity entity : entities) {
+            eans.add(entity.getEan());
+        }
+
+        historyRepository.deleteAll(entities);
+        log.info("HistoryController.deleteHistoryItems: deleted count={} userId={} eans={}",
+                entities.size(), userId, eans);
         return ResponseEntity.noContent().build();
     }
 
@@ -174,5 +203,9 @@ public class HistoryController {
             @NotBlank String ean,
             String productName,
             String brand
+    ) {}
+
+    public record DeleteHistoryItemsRequest(
+            @NotEmpty List<Long> ids
     ) {}
 }
