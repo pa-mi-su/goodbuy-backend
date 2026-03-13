@@ -74,6 +74,32 @@ public class HistoryController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/delete")
+    public ResponseEntity<Void> deleteHistoryItems(
+            @Valid @RequestBody DeleteHistoryItemsRequest requestBody,
+            HttpServletRequest request
+    ) {
+        UUID userId = requireAuthenticatedUserId(request);
+
+        List<Long> ids = requestBody.ids().stream()
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .toList();
+
+        if (ids.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "at least one history id is required");
+        }
+
+        List<ScanHistoryEntity> entities = historyRepository.findAllByUserIdAndIdIn(userId, ids);
+        if (entities.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "history items not found");
+        }
+
+        historyRepository.deleteAll(entities);
+        log.info("HistoryController.deleteHistoryItems: deleted count={} userId={}", entities.size(), userId);
+        return ResponseEntity.noContent().build();
+    }
+
     // ─────────────────────────────────────
     // POST: record a scan (auth via X-Session-Token)
     // ─────────────────────────────────────
@@ -174,5 +200,9 @@ public class HistoryController {
             @NotBlank String ean,
             String productName,
             String brand
+    ) {}
+
+    public record DeleteHistoryItemsRequest(
+            List<Long> ids
     ) {}
 }
