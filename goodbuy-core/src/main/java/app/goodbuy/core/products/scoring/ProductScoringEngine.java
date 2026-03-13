@@ -67,40 +67,47 @@ public class ProductScoringEngine {
 
         int avgScore = Math.round(sumScores / (float) total);
         int score = avgScore;
-        reasons.add("Average ingredient score: " + avgScore + ".");
+        reasons.add("Guidance score starts from the average rated ingredient score: " + avgScore + ".");
 
         boolean sensitiveDomain = isSensitiveDomain(domain);
+        boolean cleaningDomain = isCleaningDomain(domain);
 
         if (countF > 0) {
-            int penalty = 25 + (countF - 1) * 10;
+            int penalty = cleaningDomain ? 8 + (countF - 1) * 4 : 12 + (countF - 1) * 5;
             score -= penalty;
-            score = Math.min(score, sensitiveDomain ? 25 : 30);
-            reasons.add("Contains " + countF + " high-concern (F) ingredient(s) (-" + penalty + ").");
+            score = Math.min(score, cleaningDomain ? 58 : (sensitiveDomain ? 56 : 58));
+            reasons.add("Contains " + countF + " high-concern ingredient(s) (-" + penalty + ").");
         }
 
         if (countD > 0) {
-            int penalty = 15 + Math.max(0, countD - 1) * 5;
+            int penalty = cleaningDomain ? 4 + Math.max(0, countD - 1) * 2 : 7 + Math.max(0, countD - 1) * 3;
             score -= penalty;
-            score = Math.min(score, sensitiveDomain ? 45 : 54);
-            reasons.add("Contains " + countD + " concerning (D) ingredient(s) (-" + penalty + ").");
+            score = Math.min(score, cleaningDomain ? 68 : (sensitiveDomain ? 62 : 64));
+            reasons.add("Contains " + countD + " moderate-concern ingredient(s) (-" + penalty + ").");
         }
 
         int countCOrWorse = countC + countD + countF;
         if (countCOrWorse > 0) {
             double fracCOrWorse = countCOrWorse / (double) total;
             if (countC > 0) {
-                score = Math.min(score, 69);
+                score = Math.min(score, cleaningDomain ? 74 : 72);
             }
             if (fracCOrWorse >= 0.25) {
-                int penalty = 10;
+                int penalty = cleaningDomain ? 2 : 4;
                 score -= penalty;
-                reasons.add("At least a quarter of ingredients are C or worse (-" + penalty + ").");
+                reasons.add("A sizable share of ingredients land in the mid-to-high concern range (-" + penalty + ").");
             }
         }
 
         if (countD + countF >= 2) {
-            score = Math.min(score, sensitiveDomain ? 35 : 40);
-            reasons.add("Multiple high-concern ingredients sharply cap the product score.");
+            score = Math.min(score, cleaningDomain ? 62 : (sensitiveDomain ? 52 : 56));
+            reasons.add("Multiple concerning ingredients cap the overall guidance score.");
+        }
+
+        if (countA + countB == total && avgScore >= 82) {
+            int bonus = cleaningDomain ? 2 : 3;
+            score += bonus;
+            reasons.add("Most ingredients fall in the low-concern range (+" + bonus + ").");
         }
 
         score = Math.max(0, Math.min(99, score));
@@ -123,11 +130,18 @@ public class ProductScoringEngine {
                 || normalized.contains("baby");
     }
 
+    private boolean isCleaningDomain(String domain) {
+        if (domain == null) {
+            return false;
+        }
+        return domain.trim().toLowerCase(java.util.Locale.ROOT).contains("cleaning");
+    }
+
     private String mapGrade(int score) {
-        if (score >= 90) return "A";  // Very safe
-        if (score >= 80) return "B";  // Generally safe
-        if (score >= 70) return "C";  // Mixed / moderate concern
-        if (score >= 55) return "D";  // Concerning
-        return "F";                   // High concern
+        if (score >= 88) return "A";
+        if (score >= 74) return "B";
+        if (score >= 58) return "C";
+        if (score >= 42) return "D";
+        return "F";
     }
 }
