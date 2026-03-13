@@ -1,6 +1,7 @@
 package app.goodbuy.products;
 
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
 import app.goodbuy.ingredients.IngredientOnDemandResearchService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
@@ -32,19 +33,22 @@ public class ProductService {
     private final AsyncProductIngestionService asyncIngestionService;
     private final ProductEvidenceReportService productEvidenceReportService;
     private final IngredientOnDemandResearchService ingredientOnDemandResearchService;
+    private final ProductScoringAdapterService productScoringAdapterService;
 
     public ProductService(Optional<ExternalCatalogClient> external,
                           Optional<ProductLookupPort> lookup,
                           Optional<ProductSnapshotPort> snapshot,
                           AsyncProductIngestionService asyncIngestionService,
                           Optional<ProductEvidenceReportService> productEvidenceReportService,
-                          IngredientOnDemandResearchService ingredientOnDemandResearchService) {
+                          IngredientOnDemandResearchService ingredientOnDemandResearchService,
+                          Optional<ProductScoringAdapterService> productScoringAdapterService) {
         this.external = external.orElse(null);
         this.lookup = lookup.orElse(null);
         this.snapshot = snapshot.orElse(null);
         this.asyncIngestionService = asyncIngestionService;
         this.productEvidenceReportService = productEvidenceReportService.orElse(null);
         this.ingredientOnDemandResearchService = ingredientOnDemandResearchService;
+        this.productScoringAdapterService = productScoringAdapterService.orElse(null);
 
         log.info("ProductService wiring: external={}, lookup={}, snapshot={}",
                 this.external != null ? this.external.getClass().getSimpleName() : "<none>",
@@ -82,6 +86,11 @@ public class ProductService {
         if (fromDbFirst != null) {
             reportLowCoverageIngredients(fromDbFirst);
             queueIngredientResearch(fromDbFirst);
+            ProductDetailDto rescored = tryRescoreAndReload(code);
+            if (isStrictlyScored(rescored)) {
+                log.info("ProductService.getByGtinOrNull: returning rescored DB snapshot gtin={}", code);
+                return rescored;
+            }
             log.info("ProductService.getByGtinOrNull: returning existing DB snapshot without re-enrichment gtin={} strictScored=false", code);
             return fromDbFirst;
         }
@@ -278,6 +287,20 @@ public class ProductService {
                 .distinct()
                 .limit(100)
                 .forEach(ingredientOnDemandResearchService::getOrStartResearch);
+    }
+
+    private ProductDetailDto tryRescoreAndReload(String code) {
+        if (productScoringAdapterService == null || lookup == null || code == null || code.isBlank()) {
+            return null;
+        }
+
+        try {
+            productScoringAdapterService.rescoreByEan(code);
+            return tryDbLookup(code);
+        } catch (Exception ex) {
+            log.warn("ProductService.tryRescoreAndReload: failed gtin={} err={}", code, ex.toString());
+            return null;
+        }
     }
 
 }
