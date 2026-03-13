@@ -33,6 +33,8 @@ public record ProductView(
         List<ProductIngredientView> ingredients,
         List<String> claims,
         List<String> hazards,
+        List<ProductGuidanceSignalView> guidanceSignals,
+        String guidanceConfidence,
         String source,
         BigDecimal safetyScore,
         String ratingLetter
@@ -179,6 +181,16 @@ public record ProductView(
             }
         }
 
+        ProductGuidanceSignals.ProductGuidanceSummary guidance = ProductGuidanceSignals.build(
+                effectiveDomain,
+                dto.name(),
+                dto.category(),
+                scoringStatus,
+                productScore,
+                productRating,
+                ingredientViews
+        );
+
         return new ProductView(
                 dto.gtin(),
                 dto.name(),
@@ -193,6 +205,8 @@ public record ProductView(
                 ingredientViews,
                 List.of(),
                 List.of(),
+                guidance.signals(),
+                guidance.confidence(),
                 source,
                 productScore,
                 productRating

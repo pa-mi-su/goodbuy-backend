@@ -15,7 +15,15 @@ public record ProductViewDto(
         List<ProductIngredientViewDto> ingredients,
         List<String> claims,
         List<String> hazards,
+        List<ProductGuidanceSignalDto> guidanceSignals,
+        String guidanceConfidence,
         String source,
         BigDecimal safetyScore,   // product-level score
         String ratingLetter       // product-level grade
-) {}
+) {
+    public record ProductGuidanceSignalDto(
+            String label,
+            String tone,
+            String basis
+    ) {}
+}
