@@ -17,6 +17,8 @@ public interface ScanHistoryRepository extends JpaRepository<ScanHistoryEntity, 
     // Used by HistoryController → upsert scans
     Optional<ScanHistoryEntity> findByUserIdAndEan(UUID userId, String ean);
 
+    Optional<ScanHistoryEntity> findByIdAndUserId(Long id, UUID userId);
+
     // ✅ Used by AppUserService.countScansForUser (Profile screen)
     long countByUserId(UUID userId);
 }
