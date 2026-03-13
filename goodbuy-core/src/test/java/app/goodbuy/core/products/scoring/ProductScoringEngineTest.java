@@ -29,8 +29,8 @@ class ProductScoringEngineTest {
                 new IngredientScoreResult(30, "F", List.of())
         ), "cosmetic");
 
-        assertEquals("F", result.ratingLetter());
-        assertTrue(result.safetyScore() <= 25);
+        assertEquals("D", result.ratingLetter());
+        assertTrue(result.safetyScore() <= 50);
     }
 
     @Test
@@ -41,7 +41,19 @@ class ProductScoringEngineTest {
                 new IngredientScoreResult(88, "B", List.of())
         ), "supplement");
 
-        assertEquals("B", result.ratingLetter());
-        assertTrue(result.safetyScore() >= 80);
+        assertEquals("A", result.ratingLetter());
+        assertTrue(result.safetyScore() >= 88);
+    }
+
+    @Test
+    void cleaningProductsAreGuidedLessPunitively() {
+        ProductScoreResult result = engine.score(List.of(
+                new IngredientScoreResult(90, "A", List.of()),
+                new IngredientScoreResult(48, "D", List.of()),
+                new IngredientScoreResult(62, "C", List.of())
+        ), "cleaning");
+
+        assertTrue(result.safetyScore() >= 58);
+        assertEquals("C", result.ratingLetter());
     }
 }

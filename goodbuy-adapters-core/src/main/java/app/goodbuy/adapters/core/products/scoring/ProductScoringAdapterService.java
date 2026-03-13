@@ -94,15 +94,18 @@ public class ProductScoringAdapterService {
             return ProductScoreResult.unrated("No ingredient scores available yet for this product.");
         }
 
-        if (scoredCount < totalIngredients) {
+        double coverage = scoredCount / (double) totalIngredients;
+        double requiredCoverage = requiredCoverageFor(managed.getDomain());
+
+        if (coverage < requiredCoverage) {
             managed.setSafetyScore(null);
             managed.setRatingLetter(null);
 
-            log.info("Product scoring: id={} ean={} -> UNRATED (partial coverage {}/{})",
-                    managed.getId(), managed.getEan(), scoredCount, totalIngredients);
+            log.info("Product scoring: id={} ean={} -> UNRATED (coverage {}/{} below threshold {})",
+                    managed.getId(), managed.getEan(), scoredCount, totalIngredients, requiredCoverage);
 
             return ProductScoreResult.unrated(String.format(
-                    "We only have GoodBuy data for %d of %d ingredients; until we have them all, we won't attach an overall safety score.",
+                    "We have guidance for %d of %d ingredients. We need a bit more coverage before showing an overall product score.",
                     scoredCount, totalIngredients
             ));
         }
@@ -118,6 +121,23 @@ public class ProductScoringAdapterService {
                 scoredCount, totalIngredients);
 
         return result;
+    }
+
+    private double requiredCoverageFor(String domain) {
+        if (domain == null || domain.isBlank()) {
+            return 0.80d;
+        }
+        String normalized = domain.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized.contains("cleaning")) {
+            return 0.70d;
+        }
+        if (normalized.contains("vitamin")
+                || normalized.contains("supplement")
+                || normalized.contains("food")
+                || normalized.contains("baby")) {
+            return 0.85d;
+        }
+        return 0.80d;
     }
 
     @Transactional
