@@ -52,7 +52,6 @@ class HistoryControllerTest {
         user.setId(userId);
 
         ScanHistoryEntity entity = new ScanHistoryEntity(userId, "00016500586579");
-        entity.setId(10L);
 
         when(request.getAttribute("goodbuyUser")).thenReturn(user);
         when(repository.findAllByUserIdAndIdIn(userId, List.of(10L, 11L))).thenReturn(List.of(entity));
