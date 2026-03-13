@@ -19,6 +19,8 @@ public interface ScanHistoryRepository extends JpaRepository<ScanHistoryEntity, 
 
     Optional<ScanHistoryEntity> findByIdAndUserId(Long id, UUID userId);
 
+    List<ScanHistoryEntity> findAllByUserIdAndIdIn(UUID userId, List<Long> ids);
+
     // ✅ Used by AppUserService.countScansForUser (Profile screen)
     long countByUserId(UUID userId);
 }
