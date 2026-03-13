@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class ProductScoringAdapterService {
@@ -144,6 +145,25 @@ public class ProductScoringAdapterService {
 
         log.info("ProductScoringAdapterService: completed batch product rescoring; processed {} products", processed);
         return processed;
+    }
+
+    @Transactional
+    public Optional<ProductScoreResult> rescoreByEan(String ean) {
+        if (ean == null || ean.isBlank()) {
+            return Optional.empty();
+        }
+
+        TypedQuery<ProductEntity> query = em.createQuery(
+                "SELECT p FROM ProductEntity p WHERE p.ean = :ean",
+                ProductEntity.class
+        );
+        query.setParameter("ean", ean.trim());
+        List<ProductEntity> products = query.getResultList();
+        if (products.isEmpty()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(scoreProduct(products.get(0)));
     }
 
     /**
