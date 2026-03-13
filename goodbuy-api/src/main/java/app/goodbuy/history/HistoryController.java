@@ -8,6 +8,7 @@ import app.goodbuy.core.history.dto.ScanHistoryDTO;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -81,22 +83,24 @@ public class HistoryController {
     ) {
         UUID userId = requireAuthenticatedUserId(request);
 
-        List<Long> ids = requestBody.ids().stream()
+        List<Long> uniqueIds = requestBody.ids().stream()
                 .filter(id -> id != null && id > 0)
                 .distinct()
                 .toList();
 
-        if (ids.isEmpty()) {
+        if (uniqueIds.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "at least one history id is required");
         }
 
-        List<ScanHistoryEntity> entities = historyRepository.findAllByUserIdAndIdIn(userId, ids);
-        if (entities.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "history items not found");
+        List<ScanHistoryEntity> entities = historyRepository.findAllByUserIdAndIdIn(userId, uniqueIds);
+        List<String> eans = new ArrayList<>(entities.size());
+        for (ScanHistoryEntity entity : entities) {
+            eans.add(entity.getEan());
         }
 
         historyRepository.deleteAll(entities);
-        log.info("HistoryController.deleteHistoryItems: deleted count={} userId={}", entities.size(), userId);
+        log.info("HistoryController.deleteHistoryItems: deleted count={} userId={} eans={}",
+                entities.size(), userId, eans);
         return ResponseEntity.noContent().build();
     }
 
@@ -203,6 +207,6 @@ public class HistoryController {
     ) {}
 
     public record DeleteHistoryItemsRequest(
-            List<Long> ids
+            @NotEmpty List<Long> ids
     ) {}
 }
