@@ -1,6 +1,11 @@
 package app.goodbuy.adapters.core.products.scoring;
 
+import app.goodbuy.adapters.core.ingredients.model.Ingredient;
+import app.goodbuy.adapters.core.ingredients.model.IngredientSignalsEntity;
+import app.goodbuy.adapters.core.ingredients.repository.IngredientSignalsRepository;
 import app.goodbuy.adapters.core.products.model.ProductEntity;
+import app.goodbuy.core.ingredients.scoring.IngredientScoringEngine;
+import app.goodbuy.core.ingredients.scoring.IngredientSignals;
 import app.goodbuy.core.ingredients.scoring.IngredientScoreResult;
 import app.goodbuy.core.products.scoring.ProductScoreResult;
 import app.goodbuy.core.products.scoring.ProductScoringEngine;
@@ -15,44 +20,24 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
-/**
- * Spring adapter that:
- *
- *  - Re-loads the ProductEntity from the DB
- *  - Collects ingredient-level scores
- *  - Runs the pure ProductScoringEngine
- *  - WRITES safety_score + rating_letter back to the products table
- *
- * Semantics (🚨 important, matches your UX copy):
- *
- *  - If there is NO ingredient list at all for this product:
- *      -> product.safety_score and rating_letter are set to NULL
- *      -> we return ProductScoreResult with ratingLetter="NR"
- *
- *  - If there IS an ingredient list, but SOME ingredients are missing scores:
- *      -> we DO NOT compute or persist an overall product score
- *      -> product.safety_score and rating_letter are set to NULL
- *      -> we return ProductScoreResult.unrated(...) explaining that we only
- *         have GoodBuy data for X of Y ingredients, so we withhold the score.
- *
- *  - Only when ALL ingredients have scores:
- *      -> we run ProductScoringEngine over the fully-scored list
- *      -> product.safety_score and rating_letter are persisted (A–F, etc.)
- */
 @Service
 public class ProductScoringAdapterService {
 
     private static final Logger log = LoggerFactory.getLogger(ProductScoringAdapterService.class);
 
     private final ProductScoringEngine engine = new ProductScoringEngine();
+    private final IngredientScoringEngine ingredientScoringEngine = new IngredientScoringEngine();
+    private final IngredientSignalsRepository signalsRepo;
 
     @PersistenceContext
     private EntityManager em;
 
-    /**
-     * Compute and persist score for a single product.
-     */
+    public ProductScoringAdapterService(IngredientSignalsRepository signalsRepo) {
+        this.signalsRepo = signalsRepo;
+    }
+
     @Transactional
     public ProductScoreResult scoreProduct(ProductEntity product) {
 
@@ -60,140 +45,101 @@ public class ProductScoringAdapterService {
             throw new IllegalArgumentException("scoreProduct: product or id was null");
         }
 
-        // Get a fresh, managed instance
         ProductEntity managed = em.find(ProductEntity.class, product.getId());
         if (managed == null) {
             throw new IllegalArgumentException("scoreProduct: product id=" + product.getId() + " not found");
         }
 
-        // ─────────────────────────────────────
-        // Case 1: NO ingredient list at all → UNRATED
-        // ─────────────────────────────────────
         if (managed.getProductIngredients() == null || managed.getProductIngredients().isEmpty()) {
             managed.setSafetyScore(null);
             managed.setRatingLetter(null);
 
-            ProductScoreResult result = ProductScoreResult.unrated(
-                    "No ingredient list available for this product."
-            );
+            log.info("Product scoring: id={} ean={} -> UNRATED (no ingredient list)",
+                    managed.getId(), managed.getEan());
 
-            log.info(
-                    "Product scoring: id={} ean={} -> UNRATED (no ingredient list)",
-                    managed.getId(),
-                    managed.getEan()
-            );
-
-            return result; // managed entity will flush on tx commit
+            return ProductScoreResult.unrated("No ingredient list available for this product.");
         }
 
         int totalIngredients = managed.getProductIngredients().size();
         List<IngredientScoreResult> ingredientScores = new ArrayList<>();
-        int scoredCount = 0;
 
-        // Collect ONLY fully-scored ingredients
         managed.getProductIngredients().forEach(link -> {
-            var ing = link.getIngredient();
-            if (ing == null) {
-                return;
-            }
+            Ingredient ing = link.getIngredient();
+            if (ing == null) return;
 
+            // If ingredient lacks score, try to derive from signals (safety net)
             if (ing.getSafetyScore() == null || ing.getRatingLetter() == null) {
-                // Missing ingredient score → counted as "unscored", but we do NOT fake a 50/C anymore.
-                return;
+                boolean derived = tryDeriveAndPersistIngredientScoreFromSignals(ing);
+                if (!derived) {
+                    return; // still unscored
+                }
             }
 
-            ingredientScores.add(
-                    new IngredientScoreResult(
-                            ing.getSafetyScore().intValue(),
-                            ing.getRatingLetter(),
-                            List.of()
-                    )
-            );
+            ingredientScores.add(new IngredientScoreResult(
+                    ing.getSafetyScore().intValue(),
+                    ing.getRatingLetter(),
+                    List.of()
+            ));
         });
 
-        scoredCount = ingredientScores.size();
+        int scoredCount = ingredientScores.size();
 
-        // ─────────────────────────────────────
-        // Case 2: We have ingredients, but ZERO have scores → UNRATED
-        // ─────────────────────────────────────
         if (scoredCount == 0) {
             managed.setSafetyScore(null);
             managed.setRatingLetter(null);
 
-            ProductScoreResult result = ProductScoreResult.unrated(
-                    "No ingredient scores available yet for this product."
-            );
+            log.info("Product scoring: id={} ean={} -> UNRATED (0 of {} ingredients have scores)",
+                    managed.getId(), managed.getEan(), totalIngredients);
 
-            log.info(
-                    "Product scoring: id={} ean={} -> UNRATED (0 of {} ingredients have scores)",
-                    managed.getId(),
-                    managed.getEan(),
-                    totalIngredients
-            );
-
-            return result;
+            return ProductScoreResult.unrated("No ingredient scores available yet for this product.");
         }
 
-        // ─────────────────────────────────────
-        // Case 3: Partial coverage (some scored, some not) → UNRATED
-        // This matches your UX: show ingredient-level info, BUT
-        // DO NOT attach an overall product score until we have them ALL.
-        // ─────────────────────────────────────
-        if (scoredCount < totalIngredients) {
+        double coverage = scoredCount / (double) totalIngredients;
+        double requiredCoverage = requiredCoverageFor(managed.getDomain());
+
+        if (coverage < requiredCoverage) {
             managed.setSafetyScore(null);
             managed.setRatingLetter(null);
 
-            String msg = String.format(
-                    "We only have GoodBuy data for %d of %d ingredients; " +
-                            "until we have them all, we won't attach an overall safety score.",
-                    scoredCount,
-                    totalIngredients
-            );
+            log.info("Product scoring: id={} ean={} -> UNRATED (coverage {}/{} below threshold {})",
+                    managed.getId(), managed.getEan(), scoredCount, totalIngredients, requiredCoverage);
 
-            ProductScoreResult result = ProductScoreResult.unrated(msg);
-
-            log.info(
-                    "Product scoring: id={} ean={} -> UNRATED (partial coverage {}/{})",
-                    managed.getId(),
-                    managed.getEan(),
-                    scoredCount,
-                    totalIngredients
-            );
-
-            return result;
+            return ProductScoreResult.unrated(String.format(
+                    "We have guidance for %d of %d ingredients. We need a bit more coverage before showing an overall product score.",
+                    scoredCount, totalIngredients
+            ));
         }
 
-        // ─────────────────────────────────────
-        // Case 4: FULL coverage → compute and persist real product score
-        // ─────────────────────────────────────
-        ProductScoreResult result = engine.score(ingredientScores);
+        ProductScoreResult result = engine.score(ingredientScores, managed.getDomain());
 
         managed.setSafetyScore(BigDecimal.valueOf(result.safetyScore()));
         managed.setRatingLetter(result.ratingLetter());
 
-        log.info(
-                "Product scoring: id={} ean={} -> score={} grade={} (full coverage {}/{})",
-                managed.getId(),
-                managed.getEan(),
-                result.safetyScore(),
-                result.ratingLetter(),
-                scoredCount,
-                totalIngredients
-        );
+        log.info("Product scoring: id={} ean={} -> score={} grade={} (full coverage {}/{})",
+                managed.getId(), managed.getEan(),
+                result.safetyScore(), result.ratingLetter(),
+                scoredCount, totalIngredients);
 
         return result;
     }
 
-    /**
-     * Batch: recompute and persist scores for ALL products.
-     *
-     * Honors the same semantics as scoreProduct(...):
-     *  - no ingredient list      → UNRATED (NULL columns)
-     *  - partial ingredient data → UNRATED (NULL columns)
-     *  - full ingredient data    → real score + letter persisted
-     *
-     * @return number of products that were processed (rated or unrated)
-     */
+    private double requiredCoverageFor(String domain) {
+        if (domain == null || domain.isBlank()) {
+            return 0.80d;
+        }
+        String normalized = domain.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized.contains("cleaning")) {
+            return 0.70d;
+        }
+        if (normalized.contains("vitamin")
+                || normalized.contains("supplement")
+                || normalized.contains("food")
+                || normalized.contains("baby")) {
+            return 0.85d;
+        }
+        return 0.80d;
+    }
+
     @Transactional
     public int recalcScoresForAllProducts() {
         log.info("ProductScoringAdapterService: starting batch product rescoring for ALL products…");
@@ -213,12 +159,70 @@ public class ProductScoringAdapterService {
                 scoreProduct(p);
                 processed++;
             } catch (Exception ex) {
-                // Don't blow up the entire batch if one product is bad.
                 log.error("ProductScoringAdapterService: failed to rescore product id={}", p.getId(), ex);
             }
         }
 
         log.info("ProductScoringAdapterService: completed batch product rescoring; processed {} products", processed);
         return processed;
+    }
+
+    @Transactional
+    public Optional<ProductScoreResult> rescoreByEan(String ean) {
+        if (ean == null || ean.isBlank()) {
+            return Optional.empty();
+        }
+
+        TypedQuery<ProductEntity> query = em.createQuery(
+                "SELECT p FROM ProductEntity p WHERE p.ean = :ean",
+                ProductEntity.class
+        );
+        query.setParameter("ean", ean.trim());
+        List<ProductEntity> products = query.getResultList();
+        if (products.isEmpty()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(scoreProduct(products.get(0)));
+    }
+
+    /**
+     * Safety net: if Ingredient.safety_score/rating_letter are null, but signals exist,
+     * derive a score and persist it using the managed Ingredient entity.
+     */
+    private boolean tryDeriveAndPersistIngredientScoreFromSignals(Ingredient ing) {
+        if (ing.getId() == null) return false;
+
+        IngredientSignalsEntity s = signalsRepo.findById(ing.getId()).orElse(null);
+        IngredientSignals signals = s == null
+                ? IngredientSignals.empty()
+                : new IngredientSignals(
+                        s.getIarcGroup() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getIarcGroup()),
+                        s.getEwgScore() == null ? java.util.Optional.empty() : java.util.Optional.of((int) s.getEwgScore()),
+                        s.isProp65Listed(),
+                        s.isEuProhibited(),
+                        s.isEuRestricted(),
+                        s.isPubchemMutagen(),
+                        s.isPubchemReproductiveToxin(),
+                        s.isEpaChronicToxicity(),
+                        s.isSkinIrritant()
+                );
+
+        IngredientScoreResult derived = ingredientScoringEngine.score(ing.getCanonicalKey(), signals);
+        if (!derived.isRated()) {
+            return false;
+        }
+
+        ing.setSafetyScore(BigDecimal.valueOf(derived.safetyScore()));
+        ing.setRatingLetter(derived.ratingLetter());
+
+        // No explicit save() needed: ing is managed via ProductEntity graph in this TX.
+        // But forcing flush helps you see it immediately.
+        em.flush();
+
+        log.info("Ingredient score derived ingredientId={} canonicalKey='{}' => score={} letter={}",
+                ing.getId(), ing.getCanonicalKey(), derived.safetyScore(), derived.ratingLetter());
+
+        return true;
     }
 }

@@ -20,31 +20,62 @@ public class IngredientScoringEngine {
      * Main scoring entrypoint.
      */
     public IngredientScoreResult score(IngredientSignals signals) {
+        return score(null, signals);
+    }
 
-        // Baseline:
-        //  - A "very safe / neutral" ingredient should land at ~95 / A.
-        //  - Hazards subtract from this baseline.
-        int score = 95;
+    /**
+     * Conservative scoring entrypoint that considers both structured hazard signals
+     * and curated ingredient rules.
+     */
+    public IngredientScoreResult score(String canonicalKey, IngredientSignals signals) {
+        IngredientSignals effectiveSignals = signals == null ? IngredientSignals.empty() : signals;
+        List<CuratedIngredientRule> curatedRules = CuratedIngredientRules.findAll(canonicalKey);
+        boolean hasStructuredSignals = effectiveSignals.hasAnySignal();
+
+        if (!hasStructuredSignals && curatedRules.isEmpty()) {
+            return IngredientScoreResult.unrated("Insufficient authoritative evidence to rate this ingredient yet.");
+        }
+
+        int score = curatedRules.stream()
+                .map(CuratedIngredientRule::baseScoreOverride)
+                .filter(java.util.Objects::nonNull)
+                .max(Integer::compareTo)
+                .orElse(85);
         List<String> reasons = new ArrayList<>();
+        curatedRules.stream()
+                .flatMap(rule -> rule.reasons().stream())
+                .distinct()
+                .forEach(reasons::add);
+
+        boolean ignorePubchem = curatedRules.stream().anyMatch(CuratedIngredientRule::ignorePubchem);
+        Integer scoreCap = curatedRules.stream()
+                .map(CuratedIngredientRule::scoreCap)
+                .filter(java.util.Objects::nonNull)
+                .min(Integer::compareTo)
+                .orElse(null);
+
+        boolean hasNegativeSignal = false;
 
         // ─────────────────────────────────────
         // IARC carcinogenicity groups
         // ─────────────────────────────────────
-        if (signals.iarcGroup() != null && signals.iarcGroup().isPresent()) {
-            int g = signals.iarcGroup().get();
+        if (effectiveSignals.iarcGroup().isPresent()) {
+            int g = effectiveSignals.iarcGroup().get();
 
-            // We normalize:
-            // 1  -> Group 1 carcinogen (highest concern)
-            // 2  -> Group 2A / 2B bucket
-            // 3+ -> lower (but still some) concern
             if (g == 1) {
-                score -= 40;
-                reasons.add("IARC Group 1 carcinogen (-40)");
+                score -= 55;
+                scoreCap = minCap(scoreCap, 20);
+                hasNegativeSignal = true;
+                reasons.add("IARC Group 1 carcinogen (-55)");
             } else if (g == 2) {
-                score -= 30;
-                reasons.add("IARC Group 2A/2B carcinogen (-30)");
+                score -= 35;
+                scoreCap = minCap(scoreCap, 40);
+                hasNegativeSignal = true;
+                reasons.add("IARC Group 2A/2B carcinogen (-35)");
             } else {
                 score -= 20;
+                scoreCap = minCap(scoreCap, 55);
+                hasNegativeSignal = true;
                 reasons.add("IARC lower-confidence carcinogenicity signal (-20)");
             }
         }
@@ -52,25 +83,31 @@ public class IngredientScoringEngine {
         // ─────────────────────────────────────
         // California Proposition 65
         // ─────────────────────────────────────
-        if (signals.prop65Listed()) {
-            score -= 20;
-            reasons.add("California Prop 65 listed chemical (-20)");
+        if (effectiveSignals.prop65Listed()) {
+            score -= 25;
+            scoreCap = minCap(scoreCap, 45);
+            hasNegativeSignal = true;
+            reasons.add("California Prop 65 listed chemical (-25)");
         }
 
         // ─────────────────────────────────────
         // EWG numeric score (1–10)
         // ─────────────────────────────────────
-        if (signals.ewgScore() != null && signals.ewgScore().isPresent()) {
-            int ewg = signals.ewgScore().get();
+        if (effectiveSignals.ewgScore().isPresent()) {
+            int ewg = effectiveSignals.ewgScore().get();
 
             if (ewg >= 8) {
-                score -= 20;
-                reasons.add("EWG high concern rating (" + ewg + "/10) (-20)");
+                score -= 25;
+                scoreCap = minCap(scoreCap, 45);
+                hasNegativeSignal = true;
+                reasons.add("EWG high concern rating (" + ewg + "/10) (-25)");
             } else if (ewg >= 5) {
-                score -= 10;
-                reasons.add("EWG moderate concern rating (" + ewg + "/10) (-10)");
-            } else if (ewg >= 1) {
-                // No numerical bonus, but we record the low concern signal
+                score -= 15;
+                scoreCap = minCap(scoreCap, 65);
+                hasNegativeSignal = true;
+                reasons.add("EWG moderate concern rating (" + ewg + "/10) (-15)");
+            } else if (ewg <= 2 && !hasNegativeSignal) {
+                score = Math.max(score, 92);
                 reasons.add("EWG low concern rating (" + ewg + "/10)");
             }
         }
@@ -78,48 +115,61 @@ public class IngredientScoringEngine {
         // ─────────────────────────────────────
         // EU regulatory flags
         // ─────────────────────────────────────
-        if (signals.euProhibited()) {
-            score -= 50;
-            reasons.add("EU-prohibited ingredient (-50)");
-        } else if (signals.euRestricted()) {
-            score -= 15;
-            reasons.add("EU restricted-use ingredient (-15)");
+        if (effectiveSignals.euProhibited()) {
+            score -= 60;
+            scoreCap = minCap(scoreCap, 10);
+            hasNegativeSignal = true;
+            reasons.add("EU-prohibited ingredient (-60)");
+        } else if (effectiveSignals.euRestricted()) {
+            score -= 20;
+            scoreCap = minCap(scoreCap, 60);
+            hasNegativeSignal = true;
+            reasons.add("EU restricted-use ingredient (-20)");
         }
 
         // ─────────────────────────────────────
         // PubChem hazard flags
         // ─────────────────────────────────────
-        if (signals.pubchemMutagen()) {
-            score -= 15;
-            reasons.add("Mutagenicity / genotoxicity hazard identified (-15)");
-        }
+        if (!ignorePubchem) {
+            if (effectiveSignals.pubchemMutagen()) {
+                score -= 20;
+                scoreCap = minCap(scoreCap, 55);
+                hasNegativeSignal = true;
+                reasons.add("Mutagenicity / genotoxicity hazard identified (-20)");
+            }
 
-        if (signals.pubchemReproductiveToxin()) {
-            score -= 15;
-            reasons.add("Reproductive toxicity hazard (-15)");
+            if (effectiveSignals.pubchemReproductiveToxin()) {
+                score -= 20;
+                scoreCap = minCap(scoreCap, 55);
+                hasNegativeSignal = true;
+                reasons.add("Reproductive toxicity hazard (-20)");
+            }
         }
 
         // ─────────────────────────────────────
         // EPA chronic toxicity
         // ─────────────────────────────────────
-        if (signals.epaChronicToxicity()) {
-            score -= 10;
-            reasons.add("EPA chronic toxicity signal (-10)");
+        if (effectiveSignals.epaChronicToxicity()) {
+            score -= 15;
+            scoreCap = minCap(scoreCap, 65);
+            hasNegativeSignal = true;
+            reasons.add("EPA chronic toxicity signal (-15)");
         }
 
         // ─────────────────────────────────────
         // Irritation / sensitization
         // ─────────────────────────────────────
-        if (signals.skinIrritant()) {
-            score -= 5;
-            reasons.add("Skin/eye irritant or sensitizer (-5)");
+        if (effectiveSignals.skinIrritant()) {
+            score -= 8;
+            scoreCap = minCap(scoreCap, 75);
+            hasNegativeSignal = true;
+            reasons.add("Skin/eye irritant or sensitizer (-8)");
         }
 
-        // ─────────────────────────────────────
-        // Clamp and map to letter grade
-        // DB column is NUMERIC(4,2) => max 99.99,
-        // so we clamp to max 99 to avoid overflow.
-        // ─────────────────────────────────────
+        if (scoreCap != null) {
+            score = Math.min(score, scoreCap);
+        }
+
         score = Math.max(0, Math.min(99, score));
 
         String grade = mapGrade(score);
@@ -127,11 +177,15 @@ public class IngredientScoringEngine {
         return new IngredientScoreResult(score, grade, List.copyOf(reasons));
     }
 
+    private Integer minCap(Integer currentCap, int nextCap) {
+        return currentCap == null ? nextCap : Math.min(currentCap, nextCap);
+    }
+
     private String mapGrade(int score) {
-        if (score >= 90) return "A";  // Very safe
-        if (score >= 80) return "B";  // Generally safe
-        if (score >= 70) return "C";  // Mixed / moderate concern
-        if (score >= 55) return "D";  // Concerning
-        return "F";                   // High concern
+        if (score >= 90) return "A";
+        if (score >= 80) return "B";
+        if (score >= 70) return "C";
+        if (score >= 55) return "D";
+        return "F";
     }
 }

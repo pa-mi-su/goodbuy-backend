@@ -78,9 +78,10 @@ public class HistoryController {
     ) {
         UUID userId = requireAuthenticatedUserId(request);
 
-        String ean = requestBody.ean().trim();
-        var now = OffsetDateTime.now();
-
+        String ean = normalizeToGtin14(requestBody.ean());
+        if (ean == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ean must contain 12, 13, or 14 digits");
+        }
         Optional<ScanHistoryEntity> existingOpt =
                 historyRepository.findByUserIdAndEan(userId, ean);
 
@@ -90,18 +91,34 @@ public class HistoryController {
         if (existingOpt.isPresent()) {
             entity = existingOpt.get();
             status = HttpStatus.OK;
+
+            boolean changed = false;
+            if (isBlank(entity.getProductName()) && !isBlank(requestBody.productName())) {
+                entity.setProductName(requestBody.productName());
+                changed = true;
+            }
+            if (isBlank(entity.getBrand()) && !isBlank(requestBody.brand())) {
+                entity.setBrand(requestBody.brand());
+                changed = true;
+            }
+
+            if (changed) {
+                historyRepository.save(entity);
+            }
+
+            log.info("HistoryController.recordScan: ignored repeat scan userId={} ean={} changedMetadata={}",
+                    userId, ean, changed);
+            return ResponseEntity.status(status).build();
         } else {
             entity = new ScanHistoryEntity(userId, ean);
             status = HttpStatus.CREATED;
+            entity.setProductName(requestBody.productName());
+            entity.setBrand(requestBody.brand());
+            entity.setScannedAt(OffsetDateTime.now());
+            historyRepository.save(entity);
+            log.info("HistoryController.recordScan: recorded new scan userId={} ean={}", userId, ean);
+            return ResponseEntity.status(status).build();
         }
-
-        entity.setProductName(requestBody.productName());
-        entity.setBrand(requestBody.brand());
-        entity.setScannedAt(now);
-
-        historyRepository.save(entity);
-
-        return ResponseEntity.status(status).build();
     }
 
     // ─────────────────────────────────────
@@ -114,6 +131,23 @@ public class HistoryController {
             return user.getId();
         }
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Valid session token is required");
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static String normalizeToGtin14(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String digits = raw.replaceAll("\\D+", "");
+        return switch (digits.length()) {
+            case 14 -> digits;
+            case 13 -> "0" + digits;
+            case 12 -> "00" + digits;
+            default -> null;
+        };
     }
 
     // ─────────────────────────────────────
