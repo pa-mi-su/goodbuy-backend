@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -86,7 +87,7 @@ public class ProductIngredientEvidenceIngestionService {
         entity.setParsedIngredientText(outcome.parsedText());
 
         boolean queued = false;
-        if (!outcome.ingredients().isEmpty()) {
+        if (outcome.allowAutoReprocess() && !outcome.ingredients().isEmpty()) {
             ProductDetailDto reprocessDto = buildReprocessDto(
                     entity.getEan(),
                     firstNonBlank(productName, entity.getProductName()),
@@ -123,6 +124,7 @@ public class ProductIngredientEvidenceIngestionService {
         String rawText = trimToNull(manualIngredientText);
         String provider = null;
         String status = "NOT_REQUESTED";
+        boolean manualSubmission = rawText != null;
 
         if (rawText != null) {
             provider = "manual";
@@ -152,12 +154,37 @@ public class ProductIngredientEvidenceIngestionService {
 
         List<String> ingredients = IngredientTextParser.parse(rawText);
         String parsedText = ingredients.isEmpty() ? null : String.join(", ", ingredients);
+        boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission);
 
         if (rawText != null && ingredients.isEmpty()) {
             status = "PARSE_EMPTY";
+        } else if (rawText != null && !allowAutoReprocess) {
+            status = "LOW_CONFIDENCE";
         }
 
-        return new OcrOutcome(status, provider, rawText, parsedText, ingredients);
+        return new OcrOutcome(status, provider, rawText, parsedText, ingredients, allowAutoReprocess);
+    }
+
+    private static boolean shouldAutoReprocess(String rawText, List<String> ingredients, boolean manualSubmission) {
+        if (rawText == null || rawText.isBlank() || ingredients == null || ingredients.isEmpty()) {
+            return false;
+        }
+
+        if (manualSubmission) {
+            return ingredients.size() >= 2;
+        }
+
+        String normalized = rawText.toLowerCase(Locale.ROOT);
+        boolean hasIngredientMarker = normalized.contains("ingredient")
+                || normalized.contains("other ingredients")
+                || normalized.contains("inactive ingredients")
+                || normalized.contains("contains less than")
+                || normalized.contains("less than 2%");
+
+        boolean enoughParsedIngredients = ingredients.size() >= 5;
+        boolean markerBackedShortList = hasIngredientMarker && ingredients.size() >= 3;
+
+        return enoughParsedIngredients || markerBackedShortList;
     }
 
     private ProductDetailDto buildReprocessDto(
@@ -231,7 +258,8 @@ public class ProductIngredientEvidenceIngestionService {
             String provider,
             String rawText,
             String parsedText,
-            List<String> ingredients
+            List<String> ingredients,
+            boolean allowAutoReprocess
     ) {}
 
     public record ProductIngredientEvidenceIngestionResult(
