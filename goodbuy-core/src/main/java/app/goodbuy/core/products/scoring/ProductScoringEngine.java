@@ -24,14 +24,23 @@ public class ProductScoringEngine {
      * @return product score + letter grade + reasons
      */
     public ProductScoreResult score(List<IngredientScoreResult> ingredientScores) {
+        return score(ingredientScores, "unknown");
+    }
+
+    public ProductScoreResult score(List<IngredientScoreResult> ingredientScores, String domain) {
 
         List<String> reasons = new ArrayList<>();
 
-        // ─────────────────────────────────────
-        // Edge case: no ingredients -> UNRATED
-        // ─────────────────────────────────────
         if (ingredientScores == null || ingredientScores.isEmpty()) {
             reasons.add("No ingredient data available to score this product.");
+            return ProductScoreResult.unrated(reasons);
+        }
+
+        long unratedCount = ingredientScores.stream()
+                .filter(ing -> ing == null || !ing.isRated())
+                .count();
+        if (unratedCount > 0) {
+            reasons.add("Not enough authoritative ingredient evidence to rate " + unratedCount + " ingredient(s) yet.");
             return ProductScoreResult.unrated(reasons);
         }
 
@@ -58,51 +67,49 @@ public class ProductScoringEngine {
 
         int avgScore = Math.round(sumScores / (float) total);
         int score = avgScore;
-        reasons.add("Average ingredient score: " + avgScore + ".");
+        reasons.add("Guidance score starts from the average rated ingredient score: " + avgScore + ".");
 
-        // ─────────────────────────────────────
-        // Penalty: any F ingredients
-        // ─────────────────────────────────────
+        boolean sensitiveDomain = isSensitiveDomain(domain);
+        boolean cleaningDomain = isCleaningDomain(domain);
+
         if (countF > 0) {
-            int penalty = 20;
+            int penalty = cleaningDomain ? 8 + (countF - 1) * 4 : 12 + (countF - 1) * 5;
             score -= penalty;
-            reasons.add("Contains " + countF + " high-concern (F) ingredient(s) (-" + penalty + ").");
+            score = Math.min(score, cleaningDomain ? 58 : (sensitiveDomain ? 56 : 58));
+            reasons.add("Contains " + countF + " high-concern ingredient(s) (-" + penalty + ").");
         }
 
-        // ─────────────────────────────────────
-        // Penalty: any D ingredients
-        // ─────────────────────────────────────
         if (countD > 0) {
-            int penalty = 10;
+            int penalty = cleaningDomain ? 4 + Math.max(0, countD - 1) * 2 : 7 + Math.max(0, countD - 1) * 3;
             score -= penalty;
-            reasons.add("Contains " + countD + " concerning (D) ingredient(s) (-" + penalty + ").");
+            score = Math.min(score, cleaningDomain ? 68 : (sensitiveDomain ? 62 : 64));
+            reasons.add("Contains " + countD + " moderate-concern ingredient(s) (-" + penalty + ").");
         }
 
-        // ─────────────────────────────────────
-        // Penalty: many ingredients C or worse
-        // ─────────────────────────────────────
         int countCOrWorse = countC + countD + countF;
         if (countCOrWorse > 0) {
             double fracCOrWorse = countCOrWorse / (double) total;
-            if (fracCOrWorse >= 0.5) {
-                int penalty = 5;
+            if (countC > 0) {
+                score = Math.min(score, cleaningDomain ? 74 : 72);
+            }
+            if (fracCOrWorse >= 0.25) {
+                int penalty = cleaningDomain ? 2 : 4;
                 score -= penalty;
-                reasons.add("More than half of ingredients are C or worse (-" + penalty + ").");
+                reasons.add("A sizable share of ingredients land in the mid-to-high concern range (-" + penalty + ").");
             }
         }
 
-        // ─────────────────────────────────────
-        // Small boost: all ingredients A or B
-        // ─────────────────────────────────────
-        if (countC == 0 && countD == 0 && countF == 0) {
-            int boost = 3;
-            score += boost;
-            reasons.add("All ingredients are A or B only (+" + boost + ").");
+        if (countD + countF >= 2) {
+            score = Math.min(score, cleaningDomain ? 62 : (sensitiveDomain ? 52 : 56));
+            reasons.add("Multiple concerning ingredients cap the overall guidance score.");
         }
 
-        // ─────────────────────────────────────
-        // Clamp and map grade
-        // ─────────────────────────────────────
+        if (countA + countB == total && avgScore >= 82) {
+            int bonus = cleaningDomain ? 2 : 3;
+            score += bonus;
+            reasons.add("Most ingredients fall in the low-concern range (+" + bonus + ").");
+        }
+
         score = Math.max(0, Math.min(99, score));
 
         String grade = mapGrade(score);
@@ -110,11 +117,31 @@ public class ProductScoringEngine {
         return new ProductScoreResult(score, grade, List.copyOf(reasons));
     }
 
+    private boolean isSensitiveDomain(String domain) {
+        if (domain == null) {
+            return false;
+        }
+        String normalized = domain.trim().toLowerCase(java.util.Locale.ROOT);
+        return normalized.contains("food")
+                || normalized.contains("supplement")
+                || normalized.contains("vitamin")
+                || normalized.contains("beauty")
+                || normalized.contains("cosmetic")
+                || normalized.contains("baby");
+    }
+
+    private boolean isCleaningDomain(String domain) {
+        if (domain == null) {
+            return false;
+        }
+        return domain.trim().toLowerCase(java.util.Locale.ROOT).contains("cleaning");
+    }
+
     private String mapGrade(int score) {
-        if (score >= 90) return "A";  // Very safe
-        if (score >= 80) return "B";  // Generally safe
-        if (score >= 70) return "C";  // Mixed / moderate concern
-        if (score >= 55) return "D";  // Concerning
-        return "F";                   // High concern
+        if (score >= 88) return "A";
+        if (score >= 74) return "B";
+        if (score >= 58) return "C";
+        if (score >= 42) return "D";
+        return "F";
     }
 }

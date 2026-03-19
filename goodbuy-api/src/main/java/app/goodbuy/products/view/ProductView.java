@@ -12,21 +12,12 @@ import java.util.Optional;
 /**
  * High-level product view for iOS ResultView.
  *
- *  - domain: our coarse category ("cleaning", "baby", "food", "unknown", …)
- *  - categorySupported:
- *        true  → we try to rate the product (subject to coverage rules)
- *        false → we do NOT rate; client should show "not rated yet" UX
- *
- *  - safetyScore / ratingLetter at PRODUCT level:
- *        primary source is the product-level score/letter coming from ProductDetailDto
- *        (DB scoring engine). If those are missing, and the category is supported,
- *        we fall back to ingredient-based full-coverage logic.
- *
- *  - primaryImageUrl:
- *        chosen from dto.images() in this order:
- *           1) First URL that looks like an S3-hosted GoodBuy image
- *              (contains ".s3.amazonaws.com")
- *           2) First URL from dto.images() (if any)
+ * FIXES:
+ * 1) Prevent false-positive “in DB” matches by using STRICT ranked search (no loose substring fallback).
+ * 2) CanonicalKey is DB-truth for iOS:
+ *    - If we found an ingredient in DB, we ALWAYS return canonicalKey (stable key).
+ *    - inCatalog reflects “hasDetails / researched” (may be false even if row exists).
+ *    - ratingLetter/safetyScore only exposed when hasDetails == true.
  */
 public record ProductView(
         String gtin,
@@ -35,14 +26,18 @@ public record ProductView(
         String category,
         String domain,
         boolean categorySupported,
+        String scoringStatus,
+        String scoringMessage,
         String primaryImageUrl,
         List<String> images,
         List<ProductIngredientView> ingredients,
         List<String> claims,
         List<String> hazards,
+        List<ProductGuidanceSignalView> guidanceSignals,
+        String guidanceConfidence,
         String source,
-        BigDecimal safetyScore,   // product-level score (null if NR / unsupported)
-        String ratingLetter       // product-level letter: A–F or "NR"
+        BigDecimal safetyScore,
+        String ratingLetter
 ) {
 
     public static ProductView of(ProductDetailDto dto,
@@ -71,7 +66,6 @@ public record ProductView(
                         .distinct()
                         .toList();
 
-        // Prefer S3-looking URL, else first
         String primaryImageUrl = resolvePrimaryImageUrl(imageUrls);
 
         // Build ingredient views
@@ -86,9 +80,8 @@ public record ProductView(
                     .filter(Objects::nonNull)
                     .map(i -> {
                         String label = resolveLabel(i);
-                        if (label == null || label.isBlank()) {
-                            return null;
-                        }
+                        if (label == null || label.isBlank()) return null;
+
                         return new ProductIngredientView(
                                 label,
                                 null,
@@ -107,82 +100,96 @@ public record ProductView(
                     .filter(Objects::nonNull)
                     .map(i -> {
                         String label = resolveLabel(i);
-                        if (label == null || label.isBlank()) {
-                            return null;
-                        }
+                        if (label == null || label.isBlank()) return null;
 
-                        // Prefer canonical key for search if present, else fallback to label
-                        String searchKey = (i.canonical() != null && !i.canonical().isBlank())
-                                ? i.canonical().trim()
-                                : label;
+                        // Search by stable canonical key first (then canonical, then label).
+                        String searchKey = firstNonBlank(
+                                i.id(),
+                                i.canonical(),
+                                label
+                        );
 
-                        Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey);
+                        // ✅ CRITICAL FIX:
+                        // Use STRICT search so “not in DB” ingredients do NOT accidentally match
+                        // some other ingredient via loose substring fallback.
+                        Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey, false);
+
                         if (opt.isPresent()) {
                             IngredientDTO ing = opt.get();
+
+                            // IMPORTANT:
+                            // - canonicalKey != null means "exists in our DB" (found by canonical or alias)
+                            // - inCatalog means "has real details / researched", not merely "row exists"
+                            boolean hasDetails = hasDetails(ing);
+
+                            // ✅ CRITICAL FIX:
+                            // Always expose canonicalKey if the DB lookup succeeded (DB-truth key),
+                            // even if it is a skeleton (hasDetails=false).
+                            // iOS uses canonicalKey==nil as “not in DB”.
                             return new ProductIngredientView(
                                     label,
                                     ing.canonicalKey(),
-                                    true,
-                                    ing.ratingLetter(),
-                                    ing.safetyScore()
-                            );
-                        } else {
-                            // Not in DB yet → white leaf
-                            return new ProductIngredientView(
-                                    label,
-                                    null,
-                                    false,
-                                    null,
-                                    null
+                                    hasDetails,
+                                    hasDetails ? ing.ratingLetter() : null,
+                                    hasDetails ? ing.safetyScore() : null
                             );
                         }
+
+                        // Not in DB yet → missing/unknown leaf
+                        return new ProductIngredientView(
+                                label,
+                                null,
+                                false,
+                                null,
+                                null
+                        );
                     })
                     .filter(Objects::nonNull)
                     .distinct()
                     .toList();
         }
 
-        // ── Product-level scoring ─────────────────────────────────────────────
-        // 1) Prefer product-level score/letter coming from ProductDetailDto
         BigDecimal productScore = dto.safetyScore();
         String productRating    = dto.ratingLetter();
+        long totalIngredients = ingredientViews.size();
+        long catalogIngredients = ingredientViews.stream()
+                .filter(ProductIngredientView::inCatalog)
+                .count();
+        double coverageRatio = totalIngredients == 0 ? 0.0 : (catalogIngredients / (double) totalIngredients);
+        String scoringStatus = "scored";
+        String scoringMessage = null;
+        boolean missingIngredientList = categorySupported && ingredientViews.isEmpty();
 
-        // 2) Only if DTO has no product-level rating do we fall back to
-        //    ingredient-based full-coverage logic (and only for supported domains).
-        if (productScore == null && (productRating == null || productRating.isBlank()) && categorySupported) {
-            long totalIngredients = ingredientViews.size();
-            long ratedIngredients = ingredientViews.stream()
-                    .filter(ProductIngredientView::inCatalog)
-                    .filter(iv -> iv.safetyScore() != null)
-                    .count();
+        boolean hasProductScore = productScore != null
+                && productRating != null
+                && !productRating.isBlank()
+                && !"NR".equalsIgnoreCase(productRating);
 
-            boolean fullCoverage = totalIngredients > 0 && ratedIngredients == totalIngredients;
-
-            if (fullCoverage) {
-                // Worst (lowest) ingredient score drives product score.
-                for (ProductIngredientView iv : ingredientViews) {
-                    if (!iv.inCatalog()) continue;
-                    BigDecimal s = iv.safetyScore();
-                    if (s == null) continue;
-
-                    if (productScore == null || s.compareTo(productScore) < 0) {
-                        productScore = s;
-                        productRating = iv.ratingLetter();
-                    }
-                }
-                if (productRating == null || productRating.isBlank()) {
-                    productRating = "NR";
-                }
-            } else if (totalIngredients > 0) {
-                // We know some ingredients, but NOT all → product is NR.
-                productScore = null;
-                productRating = "NR";
+        if (!hasProductScore) {
+            if (!categorySupported) {
+                scoringStatus = "out_of_domain";
+            } else if (missingIngredientList) {
+                scoringStatus = "missing_ingredient_list";
+                scoringMessage = "This product listing does not include an ingredient list yet. We logged it for review.";
+            } else if (coverageRatio < 0.6d) {
+                scoringStatus = "needs_ingredient_evidence";
+                scoringMessage = "We only matched " + catalogIngredients + " of " + totalIngredients
+                        + " ingredients. Upload ingredient-label photos so we can seed the missing ones.";
             } else {
-                // No ingredients at all → NR.
-                productScore = null;
-                productRating = "NR";
+                scoringStatus = "pending_ingredients";
+                scoringMessage = "We do not yet have enough authoritative evidence to score every ingredient in this product.";
             }
         }
+
+        ProductGuidanceSignals.ProductGuidanceSummary guidance = ProductGuidanceSignals.build(
+                effectiveDomain,
+                dto.name(),
+                dto.category(),
+                scoringStatus,
+                productScore,
+                productRating,
+                ingredientViews
+        );
 
         return new ProductView(
                 dto.gtin(),
@@ -191,11 +198,15 @@ public record ProductView(
                 dto.category(),
                 effectiveDomain,
                 categorySupported,
+                scoringStatus,
+                scoringMessage,
                 primaryImageUrl,
                 imageUrls,
                 ingredientViews,
-                List.of(),   // claims placeholder
-                List.of(),   // hazards placeholder
+                List.of(),
+                List.of(),
+                guidance.signals(),
+                guidance.confidence(),
                 source,
                 productScore,
                 productRating
@@ -203,34 +214,59 @@ public record ProductView(
     }
 
     private static String resolveLabel(ProductDetailDto.IngredientDto i) {
-        if (i.original() != null && !i.original().isBlank()) {
-            return i.original().trim();
-        } else if (i.canonical() != null && !i.canonical().isBlank()) {
-            return i.canonical().trim();
-        } else if (i.id() != null && !i.id().isBlank()) {
-            return i.id().trim();
+        if (i.original() != null && !i.original().isBlank()) return i.original().trim();
+        if (i.canonical() != null && !i.canonical().isBlank()) return i.canonical().trim();
+        if (i.id() != null && !i.id().isBlank()) return i.id().trim();
+        return null;
+    }
+
+    private static String firstNonBlank(String... vals) {
+        if (vals == null) return null;
+        for (String v : vals) {
+            if (v != null && !v.isBlank()) return v.trim();
         }
         return null;
     }
 
     /**
-     * Decide which image URL to expose as primary using only dto.images():
-     *   1) First URL that looks like an S3 GoodBuy image (contains ".s3.amazonaws.com")
-     *   2) First URL from list
+     * Determines whether an ingredient has real detail content (researched),
+     * vs. being a skeleton row created during ingestion.
+     *
+     * NOTE: This does NOT require a schema/DTO change.
      */
-    private static String resolvePrimaryImageUrl(List<String> imageUrls) {
-        if (imageUrls == null || imageUrls.isEmpty()) {
-            return null;
-        }
+    private static boolean hasDetails(IngredientDTO ing) {
+        if (ing == null) return false;
 
-        // Prefer any S3-hosted URL
+        if (ing.safetyScore() != null) return true;
+        if (ing.ratingLetter() != null && !ing.ratingLetter().isBlank()) return true;
+
+        Integer refs = ing.referencesCount();
+        if (refs != null && refs > 0) return true;
+
+        if (ing.summary() != null && !ing.summary().isBlank()) return true;
+        if (ing.description() != null && !ing.description().isBlank()) return true;
+        if (ing.func() != null && !ing.func().isBlank()) return true;
+        if (ing.concerns() != null && !ing.concerns().isBlank()) return true;
+        if (ing.category() != null && !ing.category().isBlank()) return true;
+        if (ing.regulationNotes() != null && !ing.regulationNotes().isBlank()) return true;
+
+        List<String> tags = ing.tags();
+        if (tags != null && !tags.isEmpty()) return true;
+
+        List<String> aliases = ing.aliases();
+        if (aliases != null && !aliases.isEmpty()) return true;
+
+        return false;
+    }
+
+    private static String resolvePrimaryImageUrl(List<String> imageUrls) {
+        if (imageUrls == null || imageUrls.isEmpty()) return null;
+
         for (String url : imageUrls) {
             if (url != null && url.contains(".s3.amazonaws.com")) {
                 return url;
             }
         }
-
-        // Fallback: first URL
         return imageUrls.get(0);
     }
 }

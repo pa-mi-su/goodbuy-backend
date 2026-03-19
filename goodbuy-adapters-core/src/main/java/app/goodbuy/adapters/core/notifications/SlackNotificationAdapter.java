@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
@@ -55,11 +56,13 @@ public class SlackNotificationAdapter {
     // ─────────────────────────────────────────────
 
     /** Generic notifications to the default channel. */
+    @Async
     public void send(String text) {
         sendToWebhook(defaultWebhookUrl, "default", text);
     }
 
     /** Ingredient-missing notifications to the ingredients channel. */
+    @Async
     public void sendIngredientMissing(String text) {
         sendToWebhook(ingredientsWebhookUrl, "ingredients", text);
     }

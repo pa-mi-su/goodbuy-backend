@@ -10,11 +10,14 @@ import org.springframework.web.bind.annotation.*;
 public class MissingIngredientReportController {
 
     private final MissingIngredientReportService service;
+    private final IngredientOnDemandResearchService ingredientOnDemandResearchService;
 
     public MissingIngredientReportController(
-            MissingIngredientReportService service
+            MissingIngredientReportService service,
+            IngredientOnDemandResearchService ingredientOnDemandResearchService
     ) {
         this.service = service;
+        this.ingredientOnDemandResearchService = ingredientOnDemandResearchService;
     }
 
     @PostMapping
@@ -29,6 +32,7 @@ public class MissingIngredientReportController {
                 req.platform(),
                 req.notes()
         );
+        ingredientOnDemandResearchService.getOrStartResearch(req.ingredientName());
 
         return new MissingIngredientReportResponse(
                 result.entity().getId(),

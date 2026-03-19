@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>app.goodbuy</groupId>
+        <artifactId>goodbuy-backend</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>goodbuy-adapters-enrichment</artifactId>
+    <name>GoodBuy Adapters - Enrichment</name>
+    <packaging>jar</packaging>
+
+    <dependencies>
+        <!-- Core contracts / DTOs / ports -->
+        <dependency>
+            <groupId>app.goodbuy</groupId>
+            <artifactId>goodbuy-core</artifactId>
+        </dependency>
+
+        <!-- Access to JPA entities + repositories (ingredient + product tables etc.) -->
+        <dependency>
+            <groupId>app.goodbuy</groupId>
+            <artifactId>goodbuy-adapters-core</artifactId>
+        </dependency>
+
+        <!-- Spring wiring -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+        </dependency>
+
+        <!-- JDBC access for queue table -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-jdbc</artifactId>
+        </dependency>
+
+        <!-- Optional: IDE metadata for @ConfigurationProperties -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

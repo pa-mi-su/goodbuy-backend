@@ -1,6 +1,8 @@
 package app.goodbuy.products;
 
-import app.goodbuy.adapters.catalog.CatalogTransportException;
+import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.adapters.core.products.scoring.ProductScoringAdapterService;
+import app.goodbuy.ingredients.IngredientOnDemandResearchService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
@@ -28,13 +30,25 @@ public class ProductService {
 
     /** Snapshot writer into GoodBuy DB (products + product_ingredients). */
     private final ProductSnapshotPort snapshot;          // may be null
+    private final AsyncProductIngestionService asyncIngestionService;
+    private final ProductEvidenceReportService productEvidenceReportService;
+    private final IngredientOnDemandResearchService ingredientOnDemandResearchService;
+    private final ProductScoringAdapterService productScoringAdapterService;
 
     public ProductService(Optional<ExternalCatalogClient> external,
                           Optional<ProductLookupPort> lookup,
-                          Optional<ProductSnapshotPort> snapshot) {
+                          Optional<ProductSnapshotPort> snapshot,
+                          AsyncProductIngestionService asyncIngestionService,
+                          Optional<ProductEvidenceReportService> productEvidenceReportService,
+                          IngredientOnDemandResearchService ingredientOnDemandResearchService,
+                          Optional<ProductScoringAdapterService> productScoringAdapterService) {
         this.external = external.orElse(null);
         this.lookup = lookup.orElse(null);
         this.snapshot = snapshot.orElse(null);
+        this.asyncIngestionService = asyncIngestionService;
+        this.productEvidenceReportService = productEvidenceReportService.orElse(null);
+        this.ingredientOnDemandResearchService = ingredientOnDemandResearchService;
+        this.productScoringAdapterService = productScoringAdapterService.orElse(null);
 
         log.info("ProductService wiring: external={}, lookup={}, snapshot={}",
                 this.external != null ? this.external.getClass().getSimpleName() : "<none>",
@@ -44,9 +58,7 @@ public class ProductService {
 
     /** Human-friendly provider name for logs & error responses (external side). */
     public String activeSourceName() {
-        if (external == null) {
-            return "internal";
-        }
+        if (external == null) return "internal";
         String n = external.getClass().getSimpleName().toLowerCase();
         if (n.contains("eandb")) return "EAN-DB";
         if (n.contains("eansearch")) return "EAN-Search";
@@ -62,41 +74,37 @@ public class ProductService {
      */
     public ProductDetailDto getByGtinOrNull(String gtin14) {
         String code = normalize(gtin14);
-        if (code == null) {
-            return null;
-        }
+        if (code == null) return null;
 
         // 1) DB FIRST
         ProductDetailDto fromDbFirst = tryDbLookup(code);
-        if (fromDbFirst != null) {
+        if (isStrictlyScored(fromDbFirst)) {
             int count = fromDbFirst.ingredients() == null ? 0 : fromDbFirst.ingredients().size();
-            log.info("ProductService.getByGtinOrNull: using DB snapshot with {} ingredients for gtin={}",
-                    count, code);
+            log.info("ProductService.getByGtinOrNull: using DB snapshot with {} ingredients for gtin={}", count, code);
+            return fromDbFirst;
+        }
+        if (fromDbFirst != null) {
+            reportLowCoverageIngredients(fromDbFirst);
+            queueIngredientResearch(fromDbFirst);
+            ProductDetailDto rescored = tryRescoreAndReload(code);
+            if (isStrictlyScored(rescored)) {
+                log.info("ProductService.getByGtinOrNull: returning rescored DB snapshot gtin={}", code);
+                return rescored;
+            }
+            log.info("ProductService.getByGtinOrNull: returning existing DB snapshot without re-enrichment gtin={} strictScored=false", code);
             return fromDbFirst;
         }
 
         // 2) External if DB has nothing
         ProductDetailDto fromExternal = fetchFromExternal(code); // may throw 503
         if (fromExternal == null) {
-            // True miss: no DB + external returned empty (e.g. real 404)
             return null;
         }
 
-        // 3) Snapshot external into GoodBuy DB
-        trySnapshotSave(fromExternal);
+        // 3) Kick off async snapshot/enrichment and return immediately.
+        triggerAsyncSnapshot(fromExternal);
 
-        // 4) Re-read from DB
-        ProductDetailDto fromDbAfterSave = tryDbLookup(code);
-        if (fromDbAfterSave != null) {
-            int count = fromDbAfterSave.ingredients() == null ? 0 : fromDbAfterSave.ingredients().size();
-            log.info("ProductService.getByGtinOrNull: after snapshot, DB has {} ingredients for gtin={}",
-                    count, code);
-            return fromDbAfterSave;
-        }
-
-        // 5) Last resort: return external DTO
-        log.warn("ProductService.getByGtinOrNull: snapshot saved but DB still empty for gtin={}, returning external DTO",
-                code);
+        log.info("ProductService.getByGtinOrNull: returning external result immediately for gtin={} while async ingestion runs", code);
         return fromExternal;
     }
 
@@ -121,30 +129,30 @@ public class ProductService {
             log.debug("goodbuy-db miss gtin14={}", code);
             return null;
         } catch (Exception e) {
-            log.warn("goodbuy-db error on get gtin14={} msg={}", code, e.getMessage());
+            log.warn("goodbuy-db error on get gtin14={} type={} msg={}",
+                    code, e.getClass().getSimpleName(), e.getMessage());
             return null;
         }
     }
 
-    private void trySnapshotSave(ProductDetailDto dto) {
-        if (snapshot == null || dto == null) return;
-
-        String gtin = dto.gtin();
-        if (gtin == null || gtin.isBlank()) return;
-
-        try {
-            snapshot.saveSnapshot(dto);
-            log.info("goodbuy-db snapshot saved gtin14={} name={} brand={}",
-                    gtin, safe(dto.name()), safe(dto.brand()));
-        } catch (Exception e) {
-            log.warn("goodbuy-db error on snapshot gtin14={} msg={}", gtin, e.getMessage());
+    private void triggerAsyncSnapshot(ProductDetailDto dto) {
+        if (dto == null) return;
+        if (snapshot == null) {
+            log.warn("ProductService.getByGtinOrNull: snapshot pipeline unavailable; serving external result only gtin={}", dto.gtin());
+            return;
         }
+        if (dto.ingredients() == null || dto.ingredients().isEmpty()) {
+            log.warn("ProductService.getByGtinOrNull: external product has no ingredient list; skipping async ingestion gtin={}", dto.gtin());
+            reportMissingIngredientList(dto);
+            return;
+        }
+        asyncIngestionService.enqueue(dto);
     }
 
     /**
      * External fetch that distinguishes:
      *  - Optional.empty() => true miss
-     *  - CatalogTransportException => catalog down => 503
+     *  - any exception => catalog down => 503
      */
     private ProductDetailDto fetchFromExternal(String code) {
         if (external == null) return null;
@@ -166,21 +174,9 @@ public class ProductService {
             log.warn("catalog miss provider={} gtin14={} durMs={}", provider, code, ms);
             return null;
 
-        } catch (CatalogTransportException e) {
-            long ms = Duration.between(t0, Instant.now()).toMillis();
-            log.warn("catalog unavailable provider={} gtin14={} durMs={} msg={}",
-                    provider, code, ms, e.getMessage());
-
-            // Critical behavior change:
-            // DO NOT convert this to "not found". This is a provider outage / throttle / timeout.
-            throw new ResponseStatusException(
-                    HttpStatus.SERVICE_UNAVAILABLE,
-                    "External catalog temporarily unavailable (" + provider + "). Please retry."
-            );
-
         } catch (Exception e) {
             long ms = Duration.between(t0, Instant.now()).toMillis();
-            log.warn("catalog unexpected_error provider={} gtin14={} durMs={} type={} msg={}",
+            log.warn("catalog unavailable provider={} gtin14={} durMs={} type={} msg={}",
                     provider, code, ms, e.getClass().getSimpleName(), e.getMessage());
 
             throw new ResponseStatusException(
@@ -199,4 +195,112 @@ public class ProductService {
     private static String safe(String s) {
         return (s == null || s.isBlank()) ? "-" : s;
     }
+
+    private static boolean isStrictlyScored(ProductDetailDto dto) {
+        return dto != null
+                && dto.safetyScore() != null
+                && dto.ratingLetter() != null
+                && !dto.ratingLetter().isBlank()
+                && !"NR".equalsIgnoreCase(dto.ratingLetter());
+    }
+
+    private void reportMissingIngredientList(ProductDetailDto dto) {
+        if (dto == null || productEvidenceReportService == null) {
+            return;
+        }
+
+        try {
+            productEvidenceReportService.reportWithStatus(
+                    dto.gtin(),
+                    ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS,
+                    dto.name(),
+                    dto.brand(),
+                    "backend-ingestion",
+                    "backend",
+                    "External catalog returned no ingredient list.",
+                    null,
+                    null,
+                    null,
+                    null
+            );
+        } catch (Exception ex) {
+            log.warn("ProductService.reportMissingIngredientList: failed gtin={} err={}", dto.gtin(), ex.toString());
+        }
+    }
+
+    private void reportLowCoverageIngredients(ProductDetailDto dto) {
+        if (dto == null || productEvidenceReportService == null) {
+            return;
+        }
+        if (dto.ingredients() == null || dto.ingredients().isEmpty()) {
+            return;
+        }
+
+        try {
+            String notes = "Product is missing full ingredient coverage. Raw ingredient labels: "
+                    + dto.ingredients().stream()
+                    .map(ing -> {
+                        if (ing == null) return null;
+                        if (ing.original() != null && !ing.original().isBlank()) return ing.original().trim();
+                        if (ing.canonical() != null && !ing.canonical().isBlank()) return ing.canonical().trim();
+                        if (ing.id() != null && !ing.id().isBlank()) return ing.id().trim();
+                        return null;
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .limit(50)
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("(none)");
+
+            productEvidenceReportService.reportWithStatus(
+                    dto.gtin(),
+                    ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS,
+                    dto.name(),
+                    dto.brand(),
+                    "backend-ingestion",
+                    "backend",
+                    notes,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+        } catch (Exception ex) {
+            log.warn("ProductService.reportLowCoverageIngredients: failed gtin={} err={}", dto.gtin(), ex.toString());
+        }
+    }
+
+    private void queueIngredientResearch(ProductDetailDto dto) {
+        if (dto == null || dto.ingredients() == null || dto.ingredients().isEmpty()) {
+            return;
+        }
+
+        dto.ingredients().stream()
+                .filter(java.util.Objects::nonNull)
+                .map(ing -> {
+                    if (ing.canonical() != null && !ing.canonical().isBlank()) return ing.canonical().trim();
+                    if (ing.original() != null && !ing.original().isBlank()) return ing.original().trim();
+                    if (ing.id() != null && !ing.id().isBlank()) return ing.id().trim();
+                    return null;
+                })
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .limit(100)
+                .forEach(ingredientOnDemandResearchService::getOrStartResearch);
+    }
+
+    private ProductDetailDto tryRescoreAndReload(String code) {
+        if (productScoringAdapterService == null || lookup == null || code == null || code.isBlank()) {
+            return null;
+        }
+
+        try {
+            productScoringAdapterService.rescoreByEan(code);
+            return tryDbLookup(code);
+        } catch (Exception ex) {
+            log.warn("ProductService.tryRescoreAndReload: failed gtin={} err={}", code, ex.toString());
+            return null;
+        }
+    }
+
 }
