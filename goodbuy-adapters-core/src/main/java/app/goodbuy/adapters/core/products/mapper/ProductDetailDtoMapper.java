@@ -39,17 +39,14 @@ public class ProductDetailDtoMapper {
                         .filter(Objects::nonNull)
                         .toList();
 
-        // Titles / manufacturer not modeled in DB yet
         Map<String, String> titles = Collections.emptyMap();
         Map<String, String> manufacturer = Collections.emptyMap();
 
-        // Domain is stored as text on the product entity (e.g. "cleaning", "baby")
         String domain = safe(product.getDomain());
         if ("-".equals(domain)) {
             domain = "unknown";
         }
 
-        // ✅ Pass through stored product-level score + letter from DB
         return new ProductDetailDto(
                 product.getEan(),
                 product.getName(),
@@ -62,22 +59,24 @@ public class ProductDetailDtoMapper {
                 manufacturer,
                 "GOODBUY-DB",
                 domain,
-                product.getSafetyScore(),   // <-- 64
-                product.getRatingLetter()   // <-- "D"
+                product.getSafetyScore(),
+                product.getRatingLetter()
         );
     }
 
     private ProductDetailDto.IngredientDto mapIngredientLink(ProductIngredientEntity link) {
+        if (link == null) return null;
+
+        // Always show something to the client
+        String label = firstNonBlank(link.getDisplayName());
+
         if (link.getIngredient() == null) {
-            // Should not happen, but be defensive
-            String label = firstNonBlank(link.getDisplayName());
-            if (label == null) {
-                return null;
-            }
+            if (label == null) return null;
+
             return new ProductDetailDto.IngredientDto(
-                    null,          // id
-                    label,         // original
-                    null,          // canonical
+                    null, // id
+                    label, // original
+                    null, // canonical
                     Collections.emptyMap(),
                     null,
                     null
@@ -86,29 +85,25 @@ public class ProductDetailDtoMapper {
 
         var ingredient = link.getIngredient();
 
-        String piDisplayName  = link.getDisplayName();
-        String canonicalKey   = ingredient.getCanonicalKey();
-        String ingredientName = ingredient.getDisplayName();
+        String canonicalKey = firstNonBlank(ingredient.getCanonicalKey());
+        String ingredientName = firstNonBlank(ingredient.getDisplayName());
 
-        // original = what we showed on label for this product
-        String original = firstNonBlank(piDisplayName, ingredientName, canonicalKey);
-        // canonical = GoodBuy’s normalized name
-        String canonical = firstNonBlank(ingredientName, canonicalKey);
+        // original = what came from this product label/snapshot
+        String original = firstNonBlank(label, ingredientName, canonicalKey);
 
-        // Our internal stable ID = canonical_key
+        // ✅ canonical MUST be canonical_key (stable key), not display_name
+        String canonical = canonicalKey;
+
+        // ✅ id also stays canonical_key (stable)
         String id = canonicalKey;
-
-        Map<String, String> externalIds = Collections.emptyMap();
-        Boolean isVegan = null;
-        Boolean isVegetarian = null;
 
         return new ProductDetailDto.IngredientDto(
                 id,
                 original,
                 canonical,
-                externalIds,
-                isVegan,
-                isVegetarian
+                Collections.emptyMap(),
+                null,
+                null
         );
     }
 

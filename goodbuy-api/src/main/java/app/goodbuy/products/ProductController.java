@@ -2,6 +2,7 @@ package app.goodbuy.products;
 
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.port.ProductDomainConfigPort;
 import app.goodbuy.core.products.port.ProductDomainResolverPort;
 import app.goodbuy.ingredients.IngredientReadService;
 import app.goodbuy.products.view.ProductView;
@@ -23,18 +24,13 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 
 /**
  * Product lookup + rating endpoint.
  *
- * Rules:
- *   - We only RATE products whose domain == CLEANING.
- *   - Other domains still return a ProductView, but with categorySupported=false.
- *
- *   - For supported domains, product-level rating only when ALL ingredients
- *     on the label are scored. Otherwise: ratingLetter="NR", safetyScore=null.
+ * Domain classification is DB-driven via product_domain_mapping (resolver).
+ * Support/rating is DB-driven via product_domain_config (domainConfig).
  */
 @Validated
 @RestController
@@ -47,18 +43,21 @@ public class ProductController {
     private final ObjectMapper objectMapper;
     private final IngredientReadService ingredientReadService;
     private final ProductDomainResolverPort productDomainResolver;
+    private final ProductDomainConfigPort domainConfig;
 
-    public ProductController(ProductService service,
-                             ObjectMapper objectMapper,
-                             IngredientReadService ingredientReadService,
-                             ProductDomainResolverPort productDomainResolver) {
+    public ProductController(
+            ProductService service,
+            ObjectMapper objectMapper,
+            IngredientReadService ingredientReadService,
+            ProductDomainResolverPort productDomainResolver,
+            ProductDomainConfigPort domainConfig
+    ) {
         this.service = service;
         this.objectMapper = objectMapper;
         this.ingredientReadService = ingredientReadService;
         this.productDomainResolver = productDomainResolver;
+        this.domainConfig = domainConfig;
     }
-
-    // ── Simple endpoint with ETag (used by iOS ResultView) ────────────────────
 
     @GetMapping("/{code}")
     public ResponseEntity<?> getProduct(@PathVariable("code") String rawCode,
@@ -73,13 +72,34 @@ public class ProductController {
             return buildError(HttpStatus.UNPROCESSABLE_ENTITY, "invalid_barcode", e.getReason(), source);
         }
 
-        ProductDetailDto dto = service.getByGtinOrNull(gtin14);
-        if (dto == null) {
-            log.warn("ProductController.getProduct: product not found gtin14={} source={}", gtin14, source);
-            return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
+        final ProductDetailDto dto;
+        try {
+            dto = service.getByGtinOrNull(gtin14);
+        } catch (ResponseStatusException rse) {
+            // IMPORTANT: Distinguish catalog outage vs true miss.
+            // ProductService should throw 503 when DB misses and external is unavailable.
+            HttpStatus status = HttpStatus.valueOf(rse.getStatusCode().value());
+            String msg = (rse.getReason() == null || rse.getReason().isBlank())
+                    ? status.getReasonPhrase()
+                    : rse.getReason();
+
+            log.warn("ProductController.getProduct: upstream error gtin14={} status={} source={} msg={}",
+                    gtin14, status.value(), source, msg);
+
+            return ResponseEntity.status(status)
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
+                    .header("X-Product-Source", source)
+                    .body(errorBody(status, status == HttpStatus.SERVICE_UNAVAILABLE ? "catalog_unavailable" : "error", msg, source));
         }
 
-        // Domain gate via resolver (DB-driven rules behind a port).
+        if (dto == null) {
+            log.warn("ProductController.getProduct: product not found gtin14={} source={}", gtin14, source);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
+                    .header("X-Product-Source", source)
+                    .body(errorBody(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source));
+        }
+
         ProductDomain domainEnum = productDomainResolver.classify(
                 dto.domain(),
                 dto.category(),
@@ -87,12 +107,12 @@ public class ProductController {
                 dto.brand()
         );
 
-        String domain = domainEnum.name().toLowerCase(Locale.ROOT);
-        boolean categorySupported = (domainEnum == ProductDomain.CLEANING);
+        String domain = (domainEnum == null ? ProductDomain.UNKNOWN.code() : domainEnum.code());
+        boolean categorySupported = domainConfig.isEnabled(domain);
+        boolean domainRated = domainConfig.isRated(domain);
 
         if (!categorySupported) {
-            log.info("ProductController.getProduct: domain_not_supported gtin14={} domain={}",
-                    gtin14, domain);
+            log.info("ProductController.getProduct: domain_not_supported gtin14={} domain={}", gtin14, domain);
         }
 
         ProductView view = ProductView.of(dto, source, ingredientReadService, categorySupported, domain);
@@ -107,6 +127,7 @@ public class ProductController {
                     .header("X-Product-Source", source)
                     .header("X-Product-Domain", domain)
                     .header("X-Category-Supported", Boolean.toString(categorySupported))
+                    .header("X-Domain-Rated", Boolean.toString(domainRated))
                     .body(view);
         }
 
@@ -119,11 +140,12 @@ public class ProductController {
                     .header("X-Product-Source", source)
                     .header("X-Product-Domain", domain)
                     .header("X-Category-Supported", Boolean.toString(categorySupported))
+                    .header("X-Domain-Rated", Boolean.toString(domainRated))
                     .build();
         }
 
-        log.info("served product gtin14={} name={} brand={} source={} domain={} supported={} ratingLetter={}",
-                gtin14, safe(dto.name()), safe(dto.brand()), source, domain, categorySupported, view.ratingLetter());
+        log.info("served product gtin14={} name={} brand={} source={} domain={} supported={} rated={} ratingLetter={}",
+                gtin14, safe(dto.name()), safe(dto.brand()), source, domain, categorySupported, domainRated, view.ratingLetter());
 
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noCache().mustRevalidate())
@@ -131,10 +153,9 @@ public class ProductController {
                 .header("X-Product-Source", source)
                 .header("X-Product-Domain", domain)
                 .header("X-Category-Supported", Boolean.toString(categorySupported))
+                .header("X-Domain-Rated", Boolean.toString(domainRated))
                 .body(view);
     }
-
-    // ── Detail endpoint (full DTO) ────────────────────────────────────────────
 
     @GetMapping("/{code}/detail")
     public ResponseEntity<?> getProductDetail(@PathVariable("code") String rawCode,
@@ -149,10 +170,30 @@ public class ProductController {
             return buildError(HttpStatus.UNPROCESSABLE_ENTITY, "invalid_barcode", e.getReason(), source);
         }
 
-        ProductDetailDto dto = service.getDetailByGtinOrNull(gtin14);
+        final ProductDetailDto dto;
+        try {
+            dto = service.getDetailByGtinOrNull(gtin14);
+        } catch (ResponseStatusException rse) {
+            HttpStatus status = HttpStatus.valueOf(rse.getStatusCode().value());
+            String msg = (rse.getReason() == null || rse.getReason().isBlank())
+                    ? status.getReasonPhrase()
+                    : rse.getReason();
+
+            log.warn("ProductController.getProductDetail: upstream error gtin14={} status={} source={} msg={}",
+                    gtin14, status.value(), source, msg);
+
+            return ResponseEntity.status(status)
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
+                    .header("X-Product-Source", source)
+                    .body(errorBody(status, status == HttpStatus.SERVICE_UNAVAILABLE ? "catalog_unavailable" : "error", msg, source));
+        }
+
         if (dto == null) {
             log.warn("ProductController.getProductDetail: product detail not found gtin14={} source={}", gtin14, source);
-            return buildError(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source);
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .cacheControl(CacheControl.noCache().mustRevalidate())
+                    .header("X-Product-Source", source)
+                    .body(errorBody(HttpStatus.NOT_FOUND, "product_not_found", "Product not found in " + source, source));
         }
 
         String bodyJson;
@@ -186,17 +227,22 @@ public class ProductController {
                 .body(dto);
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
-
     private static ResponseEntity<Map<String, Object>> buildError(
             HttpStatus status, String code, String message, String source
     ) {
+        return ResponseEntity.status(status)
+                .cacheControl(CacheControl.noCache().mustRevalidate())
+                .header("X-Product-Source", source)
+                .body(errorBody(status, code, message, source));
+    }
+
+    private static Map<String, Object> errorBody(HttpStatus status, String code, String message, String source) {
         Map<String, Object> body = new HashMap<>();
         body.put("status", status.value());
         body.put("error", code);
         body.put("message", message);
         body.put("source", source);
-        return ResponseEntity.status(status).body(body);
+        return body;
     }
 
     private static String safe(String s) {

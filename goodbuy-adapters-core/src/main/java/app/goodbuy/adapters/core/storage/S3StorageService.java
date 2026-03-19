@@ -29,8 +29,10 @@ public class S3StorageService implements ProductImageStoragePort {
     private final String bucket;
     private final String region;
     private final String publicBaseUrl;
+    private final boolean enabled;
 
     public S3StorageService(
+            @Value("${goodbuy.s3.enabled:true}") boolean enabled,
             @Value("${goodbuy.s3.accessKey}") String accessKey,
             @Value("${goodbuy.s3.secretKey}") String secretKey,
             @Value("${goodbuy.s3.region}") String region,
@@ -38,11 +40,18 @@ public class S3StorageService implements ProductImageStoragePort {
             @Value("${goodbuy.s3.endpoint:}") String endpoint,
             @Value("${goodbuy.s3.publicBaseUrl:}") String publicBaseUrl
     ) {
+        this.enabled = enabled;
         this.bucket = bucket;
         this.region = region;
         this.publicBaseUrl = (publicBaseUrl != null && publicBaseUrl.endsWith("/"))
                 ? publicBaseUrl.substring(0, publicBaseUrl.length() - 1)
                 : publicBaseUrl;
+
+        if (!enabled) {
+            this.s3 = null;
+            log.warn("S3StorageService disabled via goodbuy.s3.enabled=false for bucket={}", bucket);
+            return;
+        }
 
         AwsBasicCredentials creds = AwsBasicCredentials.create(accessKey, secretKey);
 
@@ -67,6 +76,11 @@ public class S3StorageService implements ProductImageStoragePort {
      */
     @Override
     public String uploadImage(String key, byte[] bytes, String contentType) {
+        if (!enabled) {
+            log.info("S3StorageService.uploadImage: skipped because S3 is disabled bucket={} key={}", bucket, key);
+            return null;
+        }
+
         int byteCount = (bytes == null ? 0 : bytes.length);
 
         log.debug("S3StorageService.uploadImage: bucket={} region={} key={} bytes={} contentType={}",

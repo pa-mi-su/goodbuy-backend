@@ -35,6 +35,15 @@ public class IngredientMissingReportEntity {
     @Column(name = "notes")
     private String notes;
 
+    @Column(name = "status", nullable = false, length = 32)
+    private String status;
+
+    @Column(name = "resolved_canonical_key", length = 255)
+    private String resolvedCanonicalKey;
+
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
 
@@ -49,6 +58,9 @@ public class IngredientMissingReportEntity {
         }
         if (occurredAt == null) {
             occurredAt = now;
+        }
+        if (status == null || status.isBlank()) {
+            status = "OPEN";
         }
     }
 
@@ -96,6 +108,30 @@ public class IngredientMissingReportEntity {
 
     public void setNotes(String notes) {
         this.notes = notes;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public String getResolvedCanonicalKey() {
+        return resolvedCanonicalKey;
+    }
+
+    public void setResolvedCanonicalKey(String resolvedCanonicalKey) {
+        this.resolvedCanonicalKey = resolvedCanonicalKey;
+    }
+
+    public Instant getResolvedAt() {
+        return resolvedAt;
+    }
+
+    public void setResolvedAt(Instant resolvedAt) {
+        this.resolvedAt = resolvedAt;
     }
 
     public Instant getOccurredAt() {

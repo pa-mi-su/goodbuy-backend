@@ -39,30 +39,33 @@ public class MissingIngredientReportService {
             String platform,
             String notes
     ) {
-        var existingOpt = repo.findByIngredientNameIgnoreCaseAndProductEan(ingredientName, productEan);
-        IngredientMissingReportEntity entity;
-        boolean isNew;
+        Instant now = Instant.now();
+        boolean isNew = repo.insertIfAbsent(
+                ingredientName,
+                productEan,
+                appVersion,
+                platform,
+                notes,
+                now,
+                now
+        ) > 0;
 
-        if (existingOpt.isPresent()) {
-            entity = existingOpt.get();
-            // refresh metadata but DO NOT resend Slack
-            entity.setAppVersion(appVersion);
-            entity.setPlatform(platform);
-            entity.setNotes(notes);
-            entity.setOccurredAt(Instant.now());
-            isNew = false;
-        } else {
-            entity = new IngredientMissingReportEntity();
-            entity.setIngredientName(ingredientName);
-            entity.setProductEan(productEan);
-            entity.setAppVersion(appVersion);
-            entity.setPlatform(platform);
-            entity.setNotes(notes);
-            entity.setOccurredAt(Instant.now());
-            isNew = true;
+        if (!isNew) {
+            repo.touchExisting(
+                    ingredientName,
+                    productEan,
+                    appVersion,
+                    platform,
+                    notes,
+                    now
+            );
         }
 
-        entity = repo.save(entity);
+        IngredientMissingReportEntity entity = repo.findByIngredientNameIgnoreCaseAndProductEan(ingredientName, productEan)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Missing ingredient report row unavailable after upsert for ingredient='"
+                                + ingredientName + "' ean=" + productEan
+                ));
 
         if (isNew) {
             String slackText = """

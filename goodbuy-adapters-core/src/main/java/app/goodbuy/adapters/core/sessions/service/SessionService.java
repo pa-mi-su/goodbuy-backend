@@ -88,6 +88,41 @@ public class SessionService {
         return token;
     }
 
+    /**
+     * Convenience overload for callers that only have a UUID.
+     * Keeps API layer from depending on adapters-core entity types.
+     */
+    @Transactional
+    public String createSessionTokenForUserId(UUID userId, String ipAddress, String userAgent) {
+        if (userId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId must not be null");
+        }
+
+        AppUserEntity user = appUserRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        return createSessionTokenForUser(user, ipAddress, userAgent);
+    }
+
+    /**
+     * Convenience overload for API/controller usage when you only have a userId string.
+     */
+    @Transactional
+    public String createSessionTokenForUserId(String userId, String ipAddress, String userAgent) {
+        if (userId == null || userId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId must not be blank");
+        }
+
+        final UUID uuid;
+        try {
+            uuid = UUID.fromString(userId.trim());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId is not a valid UUID");
+        }
+
+        return createSessionTokenForUserId(uuid, ipAddress, userAgent);
+    }
+
     // ─────────────────────────────────────────────────────
     // Validate session token -> resolve user
     // ─────────────────────────────────────────────────────
