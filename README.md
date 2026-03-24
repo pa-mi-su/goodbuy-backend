@@ -6,13 +6,14 @@
 [![Flyway](https://img.shields.io/badge/Flyway-Migrations-orange)](https://flywaydb.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docs.docker.com/compose/)
 
-GoodBuy Backend is a modular Spring Boot service that powers the GoodBuy iOS app. It handles barcode-based product lookup, ingredient normalization, safety scoring, user scan history, favorites, and evidence-driven recovery when catalog data is incomplete.
+GoodBuy Backend is a modular Spring Boot service that powers the GoodBuy iOS app. It handles barcode-based product lookup, ingredient normalization, ingredient and product scoring, magic-link auth, user scan history, favorites, and evidence-driven recovery when catalog data is incomplete.
 
 ## What It Does
 
 - Serves fast product scan responses through a DB-first lookup path with async ingestion on cache miss
 - Integrates with external catalog providers such as EAN-DB to bootstrap product metadata
 - Persists normalized products, ingredients, aliases, evidence signals, and user-facing snapshots in PostgreSQL
+- Creates immediate first-pass ingredient reads so scans can return populated ingredient lists and provisional scores before deep enrichment finishes
 - Scores ingredients and products using a rule-based safety engine instead of optimistic default grading
 - Routes low-confidence and low-coverage scans into review queues instead of silently failing
 - Accepts product evidence and ingredient evidence to improve bad scans over time
@@ -20,6 +21,7 @@ GoodBuy Backend is a modular Spring Boot service that powers the GoodBuy iOS app
 ## Highlights
 
 - **Async scan ingestion:** first-time scans return quickly while enrichment, snapshot persistence, and scoring continue in the background
+- **Immediate ingredient reads:** scans can create provisional ingredient records and first-pass product scoring on the initial response
 - **Deterministic scoring:** product grades are driven by ingredient evidence and curated rules, not a “safe until proven unsafe” default
 - **Recovery workflows:** missing products, unclear ingredient lists, and unmatched ingredients are all captured in explicit review queues
 - **Seeded ingredient pipeline:** canonical ingredient seeds and aliases improve first-pass matching before manual review is needed
@@ -41,6 +43,7 @@ goodbuy-api (Spring Boot)
   -> HistoryController / FavoriteController
   -> MagicLinkAuthController / UserRegistrationController
   -> ProductEvidenceReportController
+  -> SessionTokenAuthFilter / admin APIs / upload APIs
   -> AsyncProductIngestionService + Worker
 
 goodbuy-core (domain + ports)
@@ -71,7 +74,7 @@ PostgreSQL
 
 1. Backend checks GoodBuy DB
 2. On miss, it fetches the product from the external catalog
-3. The API returns the external result immediately
+3. The API primes ingredient records on demand and can attach provisional ingredient reads and a first-pass product score immediately
 4. Background ingestion persists the snapshot, creates ingredient links, enriches, and scores
 5. Later reads resolve from GoodBuy DB
 
@@ -81,6 +84,7 @@ PostgreSQL
 2. Unmatched ingredients are routed into `ingredient_missing_report`
 3. Product-level issues are routed into `product_evidence_report`
 4. Ingredient evidence can be submitted later to reprocess the product with corrected ingredient text
+5. Provisional ingredient reads can still be shown immediately while deeper enrichment catches up
 
 ## Project Structure
 
@@ -93,6 +97,8 @@ goodbuy-backend/
 ├─ goodbuy-api/
 │  └─ src/main/java/app/goodbuy/
 │     ├─ GoodBuyBackendApplication.java
+│     ├─ config/
+│     ├─ root/
 │     ├─ auth/
 │     ├─ favorites/
 │     ├─ history/
@@ -100,10 +106,14 @@ goodbuy-backend/
 │     ├─ products/
 │     ├─ users/
 │     └─ api/
+│        ├─ admin/
+│        ├─ auth/
+│        └─ uploads/
 ├─ goodbuy-core/
 │  └─ src/main/java/app/goodbuy/core/
 │     ├─ ingredients/
 │     ├─ products/
+│     ├─ auth/
 │     └─ storage/
 ├─ goodbuy-adapters-catalog/
 │  └─ src/main/java/app/goodbuy/adapters/catalog/
@@ -111,9 +121,15 @@ goodbuy-backend/
 │     └─ eansearch/
 ├─ goodbuy-adapters-core/
 │  └─ src/main/java/app/goodbuy/adapters/core/
+│     ├─ citations/
+│     ├─ favorites/
+│     ├─ history/
 │     ├─ ingredients/
 │     ├─ notifications/
+│     ├─ ocr/
 │     ├─ products/
+│     ├─ sessions/
+│     ├─ sources/
 │     ├─ storage/
 │     └─ users/
 └─ goodbuy-adapters-enrichment/
@@ -140,10 +156,15 @@ goodbuy-backend/
 - `POST /api/v1/auth/magic-link/consume`
 - `POST /api/v1/users/register`
 - `GET /api/v1/users/me`
+- `PUT /api/v1/users/me/email`
 - `GET /api/v1/history`
+- `DELETE /api/v1/history/{historyId}`
 - `POST /api/v1/history/scan`
+- `POST /api/v1/history/delete`
 - `GET /api/v1/favorites`
+- `GET /api/v1/favorites/exists`
 - `POST /api/v1/favorites`
+- `DELETE /api/v1/favorites`
 
 ### Evidence And Recovery APIs
 
@@ -151,6 +172,13 @@ goodbuy-backend/
 - `GET /api/v1/products/evidence/status`: evidence status lookup
 - `POST /api/v1/products/evidence/ingredients`: submit corrected ingredient text or images for low-coverage products and trigger reprocessing
 - `POST /api/v1/ingredients/missing`: report unmatched ingredient strings
+
+### Admin APIs
+
+- `POST /api/v1/admin/products/recalc-scores`
+- `POST /api/v1/admin/ingredients/recalc-scores`
+- `GET /api/v1/admin/ingredients/missing`
+- `POST /api/v1/admin/ingredients/missing/resolve`
 
 ## Data Model
 
@@ -171,6 +199,9 @@ Review and recovery tables:
 
 - `ingredient_missing_report`
 - `product_evidence_report`
+- `sources`
+- `citations`
+- `ingredient_citations`
 
 Additional schema notes live in [docs/schema-notes.md](/Users/pms/Documents/Projects/goodbuy-backend/docs/schema-notes.md).
 
@@ -180,6 +211,7 @@ The backend uses a rule-based safety model for both ingredient and product scori
 
 - High-signal ingredients and classes are handled through curated rules
 - Unknown evidence does not automatically become a green score
+- First-response scores may be provisional when the backend has just created ingredient reads from a fresh scan
 - Product scoring is not a naive average; higher-risk ingredients cap the product more aggressively
 - Low-confidence products stay unrated instead of receiving false-positive safety grades
 
@@ -239,6 +271,7 @@ This backend is not just a CRUD API. It combines:
 
 - real-world catalog ingestion from imperfect third-party data
 - normalization and alias matching over messy ingredient strings
+- immediate provisional ingredient authoring for first-scan usability
 - async workflows for latency-sensitive mobile scanning
 - rule-based risk scoring
 - explicit evidence and recovery loops for bad data

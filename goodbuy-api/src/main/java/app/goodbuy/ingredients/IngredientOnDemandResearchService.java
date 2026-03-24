@@ -19,17 +19,20 @@ public class IngredientOnDemandResearchService {
     private final IngredientMapper mapper;
     private final IngredientCreationService ingredientCreationService;
     private final IngredientEnrichmentQueuePort enrichmentQueue;
+    private final ProvisionalIngredientAuthoringService provisionalIngredientAuthoringService;
 
     public IngredientOnDemandResearchService(
             IngredientRepository repo,
             IngredientMapper mapper,
             IngredientCreationService ingredientCreationService,
-            IngredientEnrichmentQueuePort enrichmentQueue
+            IngredientEnrichmentQueuePort enrichmentQueue,
+            ProvisionalIngredientAuthoringService provisionalIngredientAuthoringService
     ) {
         this.repo = repo;
         this.mapper = mapper;
         this.ingredientCreationService = ingredientCreationService;
         this.enrichmentQueue = enrichmentQueue;
+        this.provisionalIngredientAuthoringService = provisionalIngredientAuthoringService;
     }
 
     public IngredientDTO getOrStartResearch(String rawQuery) {
@@ -37,6 +40,9 @@ public class IngredientOnDemandResearchService {
         Ingredient ingredient = findBestEntity(query);
         if (ingredient == null) {
             ingredient = createSkeletonIngredient(rawQuery, query);
+        } else if (shouldApplyProvisionalProfile(ingredient)) {
+            provisionalIngredientAuthoringService.applyProvisionalProfile(ingredient, rawQuery, query);
+            ingredient = repo.saveAndFlush(ingredient);
         }
 
         if (shouldResearch(ingredient)) {
@@ -82,12 +88,27 @@ public class IngredientOnDemandResearchService {
         created.setCanonicalKey(canonicalKey);
         created.setDisplayName((rawQuery == null || rawQuery.isBlank()) ? canonicalKey : rawQuery.trim());
         created.setActive(true);
+        provisionalIngredientAuthoringService.applyProvisionalProfile(created, rawQuery, canonicalKey);
         try {
             Long ingredientId = ingredientCreationService.createIngredient(created);
             return repo.findById(ingredientId).orElseThrow();
         } catch (DataIntegrityViolationException ex) {
             return repo.findByCanonicalKeyIgnoreCase(canonicalKey).orElseThrow(() -> ex);
         }
+    }
+
+    private boolean shouldApplyProvisionalProfile(Ingredient ingredient) {
+        if (ingredient == null) {
+            return false;
+        }
+
+        return ingredient.getSafetyScore() == null
+                || isBlank(ingredient.getRatingLetter())
+                || isBlank(ingredient.getSummary())
+                || isBlank(ingredient.getDescription())
+                || isBlank(ingredient.getFuncUse())
+                || isBlank(ingredient.getConcerns())
+                || isBlank(ingredient.getCategory());
     }
 
     private boolean shouldResearch(Ingredient ingredient) {

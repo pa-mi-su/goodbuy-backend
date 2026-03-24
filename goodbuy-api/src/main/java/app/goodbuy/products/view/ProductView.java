@@ -1,11 +1,16 @@
 package app.goodbuy.products.view;
 
 import app.goodbuy.core.ingredients.dto.IngredientDTO;
+import app.goodbuy.core.ingredients.scoring.IngredientScoreResult;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.scoring.ProductScoringEngine;
 import app.goodbuy.ingredients.IngredientReadService;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -40,11 +45,22 @@ public record ProductView(
         String ratingLetter
 ) {
 
+    private static final ProductScoringEngine PRODUCT_SCORING_ENGINE = new ProductScoringEngine();
+
     public static ProductView of(ProductDetailDto dto,
                                  String source,
                                  IngredientReadService ingredientReadService,
                                  boolean categorySupported,
                                  String domainOverride) {
+        return of(dto, source, ingredientReadService, categorySupported, domainOverride, List.of());
+    }
+
+    public static ProductView of(ProductDetailDto dto,
+                                 String source,
+                                 IngredientReadService ingredientReadService,
+                                 boolean categorySupported,
+                                 String domainOverride,
+                                 List<IngredientDTO> immediateIngredientReads) {
 
         // Effective domain: controller override → DTO → "unknown"
         String effectiveDomain;
@@ -67,6 +83,7 @@ public record ProductView(
                         .toList();
 
         String primaryImageUrl = resolvePrimaryImageUrl(imageUrls);
+        Map<String, IngredientDTO> immediateIngredientMap = indexImmediateIngredients(immediateIngredientReads);
 
         // Build ingredient views
         List<ProductIngredientView> ingredientViews;
@@ -113,6 +130,9 @@ public record ProductView(
                         // Use STRICT search so “not in DB” ingredients do NOT accidentally match
                         // some other ingredient via loose substring fallback.
                         Optional<IngredientDTO> opt = ingredientReadService.searchRanked(searchKey, false);
+                        if (opt.isEmpty()) {
+                            opt = findImmediateIngredient(immediateIngredientMap, searchKey, label);
+                        }
 
                         if (opt.isPresent()) {
                             IngredientDTO ing = opt.get();
@@ -151,6 +171,13 @@ public record ProductView(
 
         BigDecimal productScore = dto.safetyScore();
         String productRating    = dto.ratingLetter();
+        if (!hasProductScore(productScore, productRating) && categorySupported) {
+            ProductScoreSnapshot provisionalScore = provisionalScore(immediateIngredientReads, effectiveDomain);
+            if (provisionalScore != null) {
+                productScore = provisionalScore.safetyScore();
+                productRating = provisionalScore.ratingLetter();
+            }
+        }
         long totalIngredients = ingredientViews.size();
         long catalogIngredients = ingredientViews.stream()
                 .filter(ProductIngredientView::inCatalog)
@@ -160,10 +187,7 @@ public record ProductView(
         String scoringMessage = null;
         boolean missingIngredientList = categorySupported && ingredientViews.isEmpty();
 
-        boolean hasProductScore = productScore != null
-                && productRating != null
-                && !productRating.isBlank()
-                && !"NR".equalsIgnoreCase(productRating);
+        boolean hasProductScore = hasProductScore(productScore, productRating);
 
         if (!hasProductScore) {
             if (!categorySupported) {
@@ -228,6 +252,105 @@ public record ProductView(
         return null;
     }
 
+    private static Optional<IngredientDTO> findImmediateIngredient(Map<String, IngredientDTO> indexed, String... candidates) {
+        if (indexed == null || indexed.isEmpty() || candidates == null) {
+            return Optional.empty();
+        }
+
+        for (String candidate : candidates) {
+            String normalized = normalizeNeedle(candidate);
+            if (normalized == null) {
+                continue;
+            }
+
+            IngredientDTO ingredient = indexed.get(normalized);
+            if (ingredient != null) {
+                return Optional.of(ingredient);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private static Map<String, IngredientDTO> indexImmediateIngredients(List<IngredientDTO> ingredients) {
+        if (ingredients == null || ingredients.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, IngredientDTO> indexed = new LinkedHashMap<>();
+        for (IngredientDTO ingredient : ingredients) {
+            if (ingredient == null) {
+                continue;
+            }
+            putIfPresent(indexed, ingredient.canonicalKey(), ingredient);
+            putIfPresent(indexed, ingredient.displayName(), ingredient);
+            if (ingredient.aliases() != null) {
+                ingredient.aliases().forEach(alias -> putIfPresent(indexed, alias, ingredient));
+            }
+        }
+        return indexed;
+    }
+
+    private static void putIfPresent(Map<String, IngredientDTO> indexed, String key, IngredientDTO ingredient) {
+        String normalized = normalizeNeedle(key);
+        if (normalized != null && ingredient != null) {
+            indexed.putIfAbsent(normalized, ingredient);
+        }
+    }
+
+    private static ProductScoreSnapshot provisionalScore(List<IngredientDTO> immediateIngredientReads, String domain) {
+        if (immediateIngredientReads == null || immediateIngredientReads.isEmpty()) {
+            return null;
+        }
+
+        List<IngredientScoreResult> scoredIngredients = immediateIngredientReads.stream()
+                .filter(Objects::nonNull)
+                .filter(ingredient -> ingredient.safetyScore() != null)
+                .filter(ingredient -> ingredient.ratingLetter() != null && !ingredient.ratingLetter().isBlank())
+                .map(ingredient -> new IngredientScoreResult(
+                        ingredient.safetyScore().intValue(),
+                        ingredient.ratingLetter(),
+                        List.of("Immediate ingredient read generated during scan.")
+                ))
+                .toList();
+
+        if (scoredIngredients.isEmpty()) {
+            return null;
+        }
+
+        var provisional = PRODUCT_SCORING_ENGINE.score(scoredIngredients, domain);
+        if (provisional.ratingLetter() == null
+                || provisional.ratingLetter().isBlank()
+                || "NR".equalsIgnoreCase(provisional.ratingLetter())) {
+            return null;
+        }
+
+        return new ProductScoreSnapshot(BigDecimal.valueOf(provisional.safetyScore()), provisional.ratingLetter());
+    }
+
+    private static boolean hasProductScore(BigDecimal productScore, String productRating) {
+        return productScore != null
+                && productRating != null
+                && !productRating.isBlank()
+                && !"NR".equalsIgnoreCase(productRating);
+    }
+
+    private static String normalizeNeedle(String raw) {
+        if (raw == null) {
+            return null;
+        }
+
+        String normalized = raw
+                .toLowerCase(Locale.ROOT)
+                .trim()
+                .replaceAll("\\s+", " ")
+                .replace('’', '\'')
+                .replace('–', '-')
+                .replace('—', '-');
+
+        return normalized.isEmpty() ? null : normalized;
+    }
+
     /**
      * Determines whether an ingredient has real detail content (researched),
      * vs. being a skeleton row created during ingestion.
@@ -269,4 +392,6 @@ public record ProductView(
         }
         return imageUrls.get(0);
     }
+
+    private record ProductScoreSnapshot(BigDecimal safetyScore, String ratingLetter) {}
 }

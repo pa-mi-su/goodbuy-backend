@@ -1,5 +1,6 @@
 package app.goodbuy.products;
 
+import app.goodbuy.core.ingredients.dto.IngredientDTO;
 import app.goodbuy.core.products.domain.ProductDomain;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductDomainConfigPort;
@@ -23,6 +24,7 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -115,7 +117,18 @@ public class ProductController {
             log.info("ProductController.getProduct: domain_not_supported gtin14={} domain={}", gtin14, domain);
         }
 
-        ProductView view = ProductView.of(dto, source, ingredientReadService, categorySupported, domain);
+        List<IngredientDTO> immediateIngredientReads = categorySupported
+                ? service.resolveImmediateIngredientReads(dto)
+                : List.of();
+
+        ProductView view = ProductView.of(
+                dto,
+                source,
+                ingredientReadService,
+                categorySupported,
+                domain,
+                immediateIngredientReads
+        );
 
         String bodyJson;
         try {
