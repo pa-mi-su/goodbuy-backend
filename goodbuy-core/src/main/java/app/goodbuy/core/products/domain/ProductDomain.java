@@ -14,9 +14,12 @@ import java.util.Locale;
 public enum ProductDomain {
 
     VITAMINS("vitamins"),
+    MEDICINE("medicine"),
     CLEANING("cleaning"),
+    PERSONAL_CARE("personal-care"),
     BABY("baby"),
     FOOD("food"),
+    HOUSEHOLD("household"),
     OTHER("other"),
     UNKNOWN("unknown");
 

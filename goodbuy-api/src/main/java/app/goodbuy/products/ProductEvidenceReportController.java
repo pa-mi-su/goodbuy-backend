@@ -13,13 +13,16 @@ public class ProductEvidenceReportController {
 
     private final ProductEvidenceReportService service;
     private final ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService;
+    private final ProductEvidenceAnalysisService productEvidenceAnalysisService;
 
     public ProductEvidenceReportController(
             ProductEvidenceReportService service,
-            ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService
+            ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService,
+            ProductEvidenceAnalysisService productEvidenceAnalysisService
     ) {
         this.service = service;
         this.ingredientEvidenceIngestionService = ingredientEvidenceIngestionService;
+        this.productEvidenceAnalysisService = productEvidenceAnalysisService;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -96,6 +99,52 @@ public class ProductEvidenceReportController {
         );
     }
 
+    @PostMapping(
+            path = "/analyze",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ProductEvidenceAnalysisResponse analyzeProductEvidence(
+            @RequestPart("productEan") String productEan,
+            @RequestPart(value = "reason", required = false) String reason,
+            @RequestPart(value = "productName", required = false) String productName,
+            @RequestPart(value = "brandName", required = false) String brandName,
+            @RequestPart(value = "appVersion", required = false) String appVersion,
+            @RequestPart(value = "platform", required = false) String platform,
+            @RequestPart(value = "notes", required = false) String notes,
+            @RequestPart(value = "ingredientText", required = false) String ingredientText,
+            @RequestPart(value = "frontImage", required = false) MultipartFile frontImage,
+            @RequestPart(value = "backImage", required = false) MultipartFile backImage
+    ) throws Exception {
+        var result = productEvidenceAnalysisService.analyze(
+                productEan,
+                reason,
+                productName,
+                brandName,
+                appVersion,
+                platform,
+                notes,
+                ingredientText,
+                frontImage == null ? null : frontImage.getBytes(),
+                frontImage == null ? null : frontImage.getContentType(),
+                backImage == null ? null : backImage.getBytes(),
+                backImage == null ? null : backImage.getContentType()
+        );
+
+        return new ProductEvidenceAnalysisResponse(
+                result.reportId(),
+                result.alreadyReported(),
+                result.status(),
+                result.analysisStatus(),
+                result.domain(),
+                result.category(),
+                result.confidenceScore(),
+                result.parsedIngredientCount(),
+                result.draftQueued()
+        );
+    }
+
     /**
      * DB-backed evidence status lookup used by iOS ResultView.
      *
@@ -118,6 +167,10 @@ public class ProductEvidenceReportController {
         }
 
         var opt = service.findActiveStatus(key, reason);
+        if (opt.isEmpty()
+                && !ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED.equalsIgnoreCase(reason)) {
+            opt = service.findActiveStatus(key, ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED);
+        }
 
         if (opt.isEmpty()) {
             // ✅ IMPORTANT: 204 means “not reported” (not an error)
@@ -151,5 +204,17 @@ public class ProductEvidenceReportController {
             String ocrStatus,
             int parsedIngredientCount,
             boolean reprocessQueued
+    ) {}
+
+    public record ProductEvidenceAnalysisResponse(
+            Long id,
+            boolean alreadyReported,
+            String status,
+            String analysisStatus,
+            String domain,
+            String category,
+            Integer confidenceScore,
+            int parsedIngredientCount,
+            boolean draftQueued
     ) {}
 }
