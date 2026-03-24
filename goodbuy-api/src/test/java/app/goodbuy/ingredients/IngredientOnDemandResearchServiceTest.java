@@ -21,14 +21,17 @@ class IngredientOnDemandResearchServiceTest {
     private final IngredientMapper mapper = new IngredientMapper();
     private final IngredientCreationService creationService = mock(IngredientCreationService.class);
     private final IngredientEnrichmentQueuePort queue = mock(IngredientEnrichmentQueuePort.class);
+    private final ProvisionalIngredientAuthoringService provisionalIngredientAuthoringService =
+            new ProvisionalIngredientAuthoringService();
 
     private final IngredientOnDemandResearchService service =
-            new IngredientOnDemandResearchService(repo, mapper, creationService, queue);
+            new IngredientOnDemandResearchService(repo, mapper, creationService, queue, provisionalIngredientAuthoringService);
 
     @Test
     void existingUnscoredIngredientQueuesResearch() {
         Ingredient ingredient = ingredient(7L, "microcrystalline cellulose", "Microcrystalline Cellulose");
         when(repo.findByCanonicalKeyIgnoreCase("microcrystalline cellulose")).thenReturn(Optional.of(ingredient));
+        when(repo.saveAndFlush(any(Ingredient.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         IngredientDTO dto = service.getOrStartResearch("Microcrystalline Cellulose");
 
@@ -39,6 +42,7 @@ class IngredientOnDemandResearchServiceTest {
     @Test
     void missingIngredientCreatesSkeletonAndQueuesResearch() {
         Ingredient created = ingredient(11L, "unknown blend", "Unknown Blend");
+        provisionalIngredientAuthoringService.applyProvisionalProfile(created, "Unknown Blend", "unknown blend");
         when(repo.findByCanonicalKeyIgnoreCase("unknown blend")).thenReturn(Optional.empty());
         when(repo.findByAliasExact("unknown blend")).thenReturn(List.of());
         when(repo.searchLoose("unknown blend")).thenReturn(List.of());
@@ -48,6 +52,7 @@ class IngredientOnDemandResearchServiceTest {
         IngredientDTO dto = service.getOrStartResearch("Unknown Blend");
 
         assertEquals(11L, dto.id());
+        assertEquals("C", dto.ratingLetter());
         verify(creationService).createIngredient(any(Ingredient.class));
         verify(queue).enqueue(11L, "ingredient_detail_lookup");
     }
