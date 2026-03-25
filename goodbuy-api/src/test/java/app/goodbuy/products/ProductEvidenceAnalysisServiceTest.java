@@ -4,6 +4,7 @@ import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
 import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import app.goodbuy.core.products.port.ProductEvidenceAnalyzerPort;
+import app.goodbuy.core.products.port.ProductIngredientOcrPort;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -131,5 +132,148 @@ class ProductEvidenceAnalysisServiceTest {
 
         assertEquals("REVIEW_REQUIRED", result.analysisStatus());
         assertEquals(false, result.draftQueued());
+    }
+
+    @Test
+    void onlyParsesIngredientPanelTextFromOcr() {
+        ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
+        ProductEvidenceReportRepository repo = mock(ProductEvidenceReportRepository.class);
+        AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductEvidenceAnalyzerPort analyzerPort = mock(ProductEvidenceAnalyzerPort.class);
+        ProductIngredientOcrPort ocrPort = mock(ProductIngredientOcrPort.class);
+
+        ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
+        entity.setEan("00381371175666");
+        entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+
+        when(evidenceReportService.reportWithStatus(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn(new ProductEvidenceReportService.ProductEvidenceReportResult(entity, true));
+        when(repo.save(any(ProductEvidenceReportEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ocrPort.extract(any())).thenReturn(Optional.of(
+                new ProductIngredientOcrPort.ProductIngredientOcrResult(
+                        """
+                        Johnson's No More Tears Wash & Shampoo
+                        Gentle enough for daily use
+                        Ingredients: Water, Cocamidopropyl Betaine, Sodium Benzoate
+                        No parabens, phthalates or dyes
+                        0.85 FLOZ (25 mL)
+                        Made in Canada
+                        """,
+                        "textract",
+                        null
+                )
+        ));
+        when(analyzerPort.analyze(any())).thenReturn(Optional.of(
+                new ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisResult(
+                        "OPENAI",
+                        "Johnson's Wash & Shampoo",
+                        "Johnson's",
+                        "personal-care",
+                        "Personal Care",
+                        List.of("Water", "Cocamidopropyl Betaine", "Sodium Benzoate", "No parabens"),
+                        88,
+                        "high",
+                        "Likely baby wash and shampoo.",
+                        "{\"ok\":true}"
+                )
+        ));
+
+        ProductEvidenceAnalysisService service = new ProductEvidenceAnalysisService(
+                evidenceReportService,
+                repo,
+                asyncService,
+                Optional.of(ocrPort),
+                Optional.of(analyzerPort)
+        );
+
+        var result = service.analyze(
+                "00381371175666",
+                ProductEvidenceReportService.REASON_MISSING_PRODUCT,
+                null,
+                null,
+                "1.0",
+                "ios",
+                "photos submitted",
+                null,
+                new byte[]{1},
+                "image/jpeg",
+                new byte[]{2},
+                "image/jpeg"
+        );
+
+        assertEquals(3, result.parsedIngredientCount());
+        verify(asyncService).enqueue(any());
+    }
+
+    @Test
+    void ignoresNoisyOcrTextWithoutIngredientSection() {
+        ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
+        ProductEvidenceReportRepository repo = mock(ProductEvidenceReportRepository.class);
+        AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductEvidenceAnalyzerPort analyzerPort = mock(ProductEvidenceAnalyzerPort.class);
+        ProductIngredientOcrPort ocrPort = mock(ProductIngredientOcrPort.class);
+
+        ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
+        entity.setEan("00381371175666");
+        entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+
+        when(evidenceReportService.reportWithStatus(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn(new ProductEvidenceReportService.ProductEvidenceReportResult(entity, true));
+        when(repo.save(any(ProductEvidenceReportEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ocrPort.extract(any())).thenReturn(Optional.of(
+                new ProductIngredientOcrPort.ProductIngredientOcrResult(
+                        """
+                        Johnson's No More Tears
+                        Wash & Shampoo
+                        No parabens, phthalates or dyes
+                        0.85 FLOZ (25 mL)
+                        Made in Canada
+                        """,
+                        "textract",
+                        null
+                )
+        ));
+        when(analyzerPort.analyze(any())).thenReturn(Optional.of(
+                new ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisResult(
+                        "OPENAI",
+                        "Johnson's Wash & Shampoo",
+                        "Johnson's",
+                        "personal-care",
+                        "Personal Care",
+                        List.of("Wash & Shampoo", "No parabens"),
+                        55,
+                        "medium",
+                        "Noisy OCR text only.",
+                        "{\"ok\":true}"
+                )
+        ));
+
+        ProductEvidenceAnalysisService service = new ProductEvidenceAnalysisService(
+                evidenceReportService,
+                repo,
+                asyncService,
+                Optional.of(ocrPort),
+                Optional.of(analyzerPort)
+        );
+
+        var result = service.analyze(
+                "00381371175666",
+                ProductEvidenceReportService.REASON_MISSING_PRODUCT,
+                null,
+                null,
+                "1.0",
+                "ios",
+                "photos submitted",
+                null,
+                new byte[]{1},
+                "image/jpeg",
+                new byte[]{2},
+                "image/jpeg"
+        );
+
+        assertEquals(0, result.parsedIngredientCount());
+        assertEquals("REVIEW_REQUIRED", result.analysisStatus());
     }
 }
