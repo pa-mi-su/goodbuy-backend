@@ -238,7 +238,8 @@ public class ProductEvidenceReportController {
                 entity.getAnalysisStatus(),
                 nextAction(entity, productAvailableNow(key)),
                 rescanAvailableNow(entity, productAvailableNow(key)),
-                availabilityMessage(entity, productAvailableNow(key))
+                availabilityMessage(entity, productAvailableNow(key)),
+                entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount()
         ));
     }
 
@@ -307,7 +308,8 @@ public class ProductEvidenceReportController {
             String analysisStatus,
             String nextAction,
             boolean rescanAvailableNow,
-            String availabilityMessage
+            String availabilityMessage,
+            int parsedIngredientCount
     ) {}
 
     public record ProductIngredientEvidenceResponse(
