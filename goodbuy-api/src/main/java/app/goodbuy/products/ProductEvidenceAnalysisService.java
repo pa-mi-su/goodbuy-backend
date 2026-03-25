@@ -7,6 +7,8 @@ import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.ingredients.IngredientTextParser;
 import app.goodbuy.core.products.port.ProductEvidenceAnalyzerPort;
 import app.goodbuy.core.products.port.ProductIngredientOcrPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +22,8 @@ import java.util.Set;
 
 @Service
 public class ProductEvidenceAnalysisService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductEvidenceAnalysisService.class);
 
     private static final int AUTO_DRAFT_CONFIDENCE = 72;
 
@@ -58,6 +62,19 @@ public class ProductEvidenceAnalysisService {
             byte[] backImageBytes,
             String backContentType
     ) {
+        log.info(
+                "Analyze product evidence start ean={} originalReason={} productName={} brandName={} manualIngredientTextPresent={} frontBytes={} backBytes={} analyzerAvailable={} ocrAvailable={}",
+                productEan,
+                originalReason,
+                productName,
+                brandName,
+                manualIngredientText != null && !manualIngredientText.isBlank(),
+                frontImageBytes == null ? 0 : frontImageBytes.length,
+                backImageBytes == null ? 0 : backImageBytes.length,
+                analyzerPort != null,
+                ingredientOcrPort != null
+        );
+
         var report = evidenceReportService.reportWithStatus(
                 productEan,
                 ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED,
@@ -91,6 +108,15 @@ public class ProductEvidenceAnalysisService {
         entity.setParsedIngredientText(ocrOutcome.parsedText());
         entity.setParsedIngredientCount(ocrOutcome.ingredients().size());
 
+        log.info(
+                "Analyze product evidence OCR ean={} status={} provider={} rawTextPresent={} parsedIngredientCount={}",
+                productEan,
+                ocrOutcome.status(),
+                ocrOutcome.provider(),
+                ocrOutcome.rawText() != null && !ocrOutcome.rawText().isBlank(),
+                ocrOutcome.ingredients().size()
+        );
+
         AnalysisOutcome analysisOutcome = analyzeEvidence(
                 entity.getEan(),
                 originalReason,
@@ -110,6 +136,18 @@ public class ProductEvidenceAnalysisService {
         entity.setAnalysisSummary(analysisOutcome.summary());
         entity.setAnalysisRawPayload(analysisOutcome.rawPayload());
 
+        log.info(
+                "Analyze product evidence AI result ean={} provider={} domain={} category={} confidence={} ingredientCount={} productName={} brandName={}",
+                productEan,
+                analysisOutcome.provider(),
+                analysisOutcome.domain(),
+                analysisOutcome.category(),
+                analysisOutcome.confidenceScore(),
+                analysisOutcome.ingredients().size(),
+                analysisOutcome.productName(),
+                analysisOutcome.brandName()
+        );
+
         boolean draftQueued = shouldAutoDraft(analysisOutcome);
         if (draftQueued) {
             entity.setStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
@@ -117,12 +155,35 @@ public class ProductEvidenceAnalysisService {
             entity.setLastReprocessedAt(OffsetDateTime.now());
             entity.setDraftCreatedAt(OffsetDateTime.now());
             asyncProductIngestionService.enqueue(buildDraftDto(entity.getEan(), analysisOutcome));
+            log.info("Analyze product evidence queued draft ean={} confidence={} ingredientCount={}", productEan, analysisOutcome.confidenceScore(), analysisOutcome.ingredients().size());
         } else {
             entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
             entity.setAnalysisStatus("REVIEW_REQUIRED");
+            log.info("Analyze product evidence marked review required ean={} confidence={} ingredientCount={}", productEan, analysisOutcome.confidenceScore(), analysisOutcome.ingredients().size());
         }
 
         evidenceReportRepository.save(entity);
+
+        String nextAction = nextAction(entity.getAnalysisStatus(), draftQueued);
+        boolean rescanAvailableNow = rescanAvailableNow(entity.getAnalysisStatus(), draftQueued);
+        String availabilityMessage = availabilityMessage(
+                entity.getAnalysisStatus(),
+                draftQueued,
+                entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount()
+        );
+
+        log.info(
+                "Analyze product evidence complete ean={} reportId={} status={} analysisStatus={} parsedIngredientCount={} draftQueued={} nextAction={} rescanAvailableNow={} availabilityMessage={}",
+                productEan,
+                entity.getId(),
+                entity.getStatus(),
+                entity.getAnalysisStatus(),
+                entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount(),
+                draftQueued,
+                nextAction,
+                rescanAvailableNow,
+                availabilityMessage
+        );
 
         return new ProductEvidenceAnalysisResult(
                 entity.getId(),
@@ -133,7 +194,10 @@ public class ProductEvidenceAnalysisService {
                 entity.getAnalysisCategory(),
                 entity.getAnalysisConfidence(),
                 entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount(),
-                draftQueued
+                draftQueued,
+                nextAction,
+                rescanAvailableNow,
+                availabilityMessage
         );
     }
 
@@ -270,6 +334,45 @@ public class ProductEvidenceAnalysisService {
                 && outcome.productName() != null
                 && !outcome.productName().isBlank()
                 && outcome.ingredients().size() >= 2;
+    }
+
+    private static String nextAction(String analysisStatus, boolean draftQueued) {
+        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus)) {
+            return "RESCAN_NOW";
+        }
+        if (draftQueued || "DRAFT_CREATED".equalsIgnoreCase(analysisStatus)) {
+            return "RESCAN_SOON";
+        }
+        if ("REVIEW_REQUIRED".equalsIgnoreCase(analysisStatus)) {
+            return "WAIT_FOR_REVIEW";
+        }
+        if ("ANALYZING".equalsIgnoreCase(analysisStatus)) {
+            return "CHECK_BACK_LATER";
+        }
+        return "WAIT_FOR_UPDATE";
+    }
+
+    private static boolean rescanAvailableNow(String analysisStatus, boolean draftQueued) {
+        return "READY_TO_RESCAN".equalsIgnoreCase(analysisStatus);
+    }
+
+    private static String availabilityMessage(String analysisStatus, boolean draftQueued, int parsedIngredientCount) {
+        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus)) {
+            return "The draft read is ready. Scan this product again now.";
+        }
+        if (draftQueued || "DRAFT_CREATED".equalsIgnoreCase(analysisStatus)) {
+            return "We started building a draft read from these photos. Try scanning again in a minute or two.";
+        }
+        if ("REVIEW_REQUIRED".equalsIgnoreCase(analysisStatus)) {
+            if (parsedIngredientCount > 0) {
+                return "We extracted some label detail, but this product still needs review before a rescan will improve.";
+            }
+            return "We could not read enough from the label yet. A sharper label photo or manual review is needed before rescanning will help.";
+        }
+        if ("ANALYZING".equalsIgnoreCase(analysisStatus)) {
+            return "We are still analyzing these photos. Give us a little time before trying again.";
+        }
+        return "We saved this submission and will keep processing it in the background.";
     }
 
     private static List<String> mergeIngredients(List<String> primary, List<String> fallback) {
@@ -449,6 +552,9 @@ public class ProductEvidenceAnalysisService {
             String category,
             Integer confidenceScore,
             int parsedIngredientCount,
-            boolean draftQueued
+            boolean draftQueued,
+            String nextAction,
+            boolean rescanAvailableNow,
+            String availabilityMessage
     ) {}
 }
