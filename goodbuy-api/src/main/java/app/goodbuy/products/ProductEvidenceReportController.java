@@ -1,6 +1,9 @@
 package app.goodbuy.products;
 
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.core.products.port.ProductLookupPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -11,15 +14,23 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/v1/products/evidence")
 public class ProductEvidenceReportController {
 
+    private static final Logger log = LoggerFactory.getLogger(ProductEvidenceReportController.class);
+
     private final ProductEvidenceReportService service;
     private final ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService;
+    private final ProductEvidenceAnalysisService productEvidenceAnalysisService;
+    private final ProductLookupPort productLookupPort;
 
     public ProductEvidenceReportController(
             ProductEvidenceReportService service,
-            ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService
+            ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService,
+            ProductEvidenceAnalysisService productEvidenceAnalysisService,
+            ProductLookupPort productLookupPort
     ) {
         this.service = service;
         this.ingredientEvidenceIngestionService = ingredientEvidenceIngestionService;
+        this.productEvidenceAnalysisService = productEvidenceAnalysisService;
+        this.productLookupPort = productLookupPort;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -96,6 +107,82 @@ public class ProductEvidenceReportController {
         );
     }
 
+    @PostMapping(
+            path = "/analyze",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public ProductEvidenceAnalysisResponse analyzeProductEvidence(
+            @RequestPart("productEan") String productEan,
+            @RequestPart(value = "reason", required = false) String reason,
+            @RequestPart(value = "productName", required = false) String productName,
+            @RequestPart(value = "brandName", required = false) String brandName,
+            @RequestPart(value = "appVersion", required = false) String appVersion,
+            @RequestPart(value = "platform", required = false) String platform,
+            @RequestPart(value = "notes", required = false) String notes,
+            @RequestPart(value = "ingredientText", required = false) String ingredientText,
+            @RequestPart(value = "frontImage", required = false) MultipartFile frontImage,
+            @RequestPart(value = "backImage", required = false) MultipartFile backImage
+    ) throws Exception {
+        log.info(
+                "Product evidence analyze request ean={} reason={} productName={} brandName={} frontImage={} backImage={} ingredientTextPresent={}",
+                productEan,
+                reason,
+                productName,
+                brandName,
+                frontImage != null && !frontImage.isEmpty(),
+                backImage != null && !backImage.isEmpty(),
+                ingredientText != null && !ingredientText.isBlank()
+        );
+
+        var result = productEvidenceAnalysisService.analyze(
+                productEan,
+                reason,
+                productName,
+                brandName,
+                appVersion,
+                platform,
+                notes,
+                ingredientText,
+                frontImage == null ? null : frontImage.getBytes(),
+                frontImage == null ? null : frontImage.getContentType(),
+                backImage == null ? null : backImage.getBytes(),
+                backImage == null ? null : backImage.getContentType()
+        );
+
+        log.info(
+                "Product evidence analyze result ean={} reportId={} status={} analysisStatus={} domain={} category={} confidence={} parsedIngredientCount={} draftQueued={} nextAction={} rescanAvailableNow={} alreadyReported={}",
+                productEan,
+                result.reportId(),
+                result.status(),
+                result.analysisStatus(),
+                result.domain(),
+                result.category(),
+                result.confidenceScore(),
+                result.parsedIngredientCount(),
+                result.draftQueued(),
+                result.nextAction(),
+                result.rescanAvailableNow(),
+                result.alreadyReported()
+        );
+
+        return new ProductEvidenceAnalysisResponse(
+                result.reportId(),
+                result.alreadyReported(),
+                result.status(),
+                result.analysisStatus(),
+                result.domain(),
+                result.category(),
+                result.confidenceScore(),
+                result.parsedIngredientCount(),
+                result.draftQueued(),
+                result.nextAction(),
+                result.rescanAvailableNow(),
+                result.availabilityMessage()
+        );
+    }
+
     /**
      * DB-backed evidence status lookup used by iOS ResultView.
      *
@@ -113,25 +200,100 @@ public class ProductEvidenceReportController {
             @RequestParam("reason") String reason
     ) {
         String key = (productEan != null && !productEan.isBlank()) ? productEan : ean;
+        log.info("Product evidence status request ean={} productEan={} resolvedKey={} reason={}", ean, productEan, key, reason);
         if (key == null || key.isBlank()) {
+            log.warn("Product evidence status bad request reason={} because key was blank", reason);
             return ResponseEntity.badRequest().build();
         }
 
         var opt = service.findActiveStatus(key, reason);
+        if (opt.isEmpty()
+                && !ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED.equalsIgnoreCase(reason)) {
+            opt = service.findActiveStatus(key, ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED);
+        }
 
         if (opt.isEmpty()) {
             // ✅ IMPORTANT: 204 means “not reported” (not an error)
+            log.info("Product evidence status not found resolvedKey={} reason={} returning=204", key, reason);
             return ResponseEntity.noContent().build();
         }
 
         var entity = opt.get();
+        log.info(
+                "Product evidence status found resolvedKey={} reason={} entityStatus={} analysisStatus={} reportId={} nextAction={} rescanAvailableNow={}",
+                key,
+                reason,
+                entity.getStatus(),
+                entity.getAnalysisStatus(),
+                entity.getId(),
+                nextAction(entity, productAvailableNow(key)),
+                rescanAvailableNow(entity, productAvailableNow(key))
+        );
 
         // ✅ Always return this shape (client decodes defensively)
         return ResponseEntity.ok(new ProductEvidenceStatusResponse(
                 true,
                 entity.getStatus(),
-                true
+                true,
+                entity.getAnalysisStatus(),
+                nextAction(entity, productAvailableNow(key)),
+                rescanAvailableNow(entity, productAvailableNow(key)),
+                availabilityMessage(entity, productAvailableNow(key)),
+                entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount()
         ));
+    }
+
+    private boolean productAvailableNow(String key) {
+        try {
+            return productLookupPort.findByGtin(key).isPresent();
+        } catch (Exception ex) {
+            log.warn("Product evidence status lookup readiness check failed key={} err={}", key, ex.toString());
+            return false;
+        }
+    }
+
+    private static String nextAction(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity, boolean productAvailableNow) {
+        String analysisStatus = entity.getAnalysisStatus();
+        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus) || ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus) && productAvailableNow)) {
+            return "RESCAN_NOW";
+        }
+        if ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus)) {
+            return "CHECK_BACK_LATER";
+        }
+        if ("REVIEW_REQUIRED".equalsIgnoreCase(analysisStatus)) {
+            return "WAIT_FOR_REVIEW";
+        }
+        if ("ANALYZING".equalsIgnoreCase(analysisStatus)) {
+            return "CHECK_BACK_LATER";
+        }
+        return "WAIT_FOR_UPDATE";
+    }
+
+    private static boolean rescanAvailableNow(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity, boolean productAvailableNow) {
+        return "READY_TO_RESCAN".equalsIgnoreCase(entity.getAnalysisStatus())
+                || ("DRAFT_CREATED".equalsIgnoreCase(entity.getAnalysisStatus()) && productAvailableNow);
+    }
+
+    private static String availabilityMessage(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity, boolean productAvailableNow) {
+        String analysisStatus = entity.getAnalysisStatus();
+        int parsedIngredientCount = entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount();
+
+        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus) || ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus) && productAvailableNow)) {
+            return "The draft read is ready. Scan this product again now.";
+        }
+        if ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus)) {
+            return "We are still building the draft read from these photos. Check back in a moment while we finish the product and ingredient decode.";
+        }
+        if ("REVIEW_REQUIRED".equalsIgnoreCase(analysisStatus)) {
+            if (parsedIngredientCount > 0) {
+                return "We extracted some label detail, but this product still needs review before a rescan will improve.";
+            }
+            return "We could not read enough from the label yet. A sharper label photo or manual review is needed before rescanning will help.";
+        }
+        if ("ANALYZING".equalsIgnoreCase(analysisStatus)) {
+            return "We are still analyzing these photos. Give us a little time before trying again.";
+        }
+        return "We saved this submission and will keep processing it in the background.";
     }
 
     public record ProductEvidenceReportResponse(
@@ -142,7 +304,12 @@ public class ProductEvidenceReportController {
     public record ProductEvidenceStatusResponse(
             boolean exists,
             String status,
-            boolean alreadyReported
+            boolean alreadyReported,
+            String analysisStatus,
+            String nextAction,
+            boolean rescanAvailableNow,
+            String availabilityMessage,
+            int parsedIngredientCount
     ) {}
 
     public record ProductIngredientEvidenceResponse(
@@ -151,5 +318,20 @@ public class ProductEvidenceReportController {
             String ocrStatus,
             int parsedIngredientCount,
             boolean reprocessQueued
+    ) {}
+
+    public record ProductEvidenceAnalysisResponse(
+            Long id,
+            boolean alreadyReported,
+            String status,
+            String analysisStatus,
+            String domain,
+            String category,
+            Integer confidenceScore,
+            int parsedIngredientCount,
+            boolean draftQueued,
+            String nextAction,
+            boolean rescanAvailableNow,
+            String availabilityMessage
     ) {}
 }

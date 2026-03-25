@@ -95,7 +95,7 @@ public class ProductController {
         }
 
         if (dto == null) {
-            log.warn("ProductController.getProduct: product not found gtin14={} source={}", gtin14, source);
+            log.info("ProductController.getProduct: product not found gtin14={} source={}", gtin14, source);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .cacheControl(CacheControl.noCache().mustRevalidate())
                     .header("X-Product-Source", source)
@@ -202,7 +202,7 @@ public class ProductController {
         }
 
         if (dto == null) {
-            log.warn("ProductController.getProductDetail: product detail not found gtin14={} source={}", gtin14, source);
+            log.info("ProductController.getProductDetail: product detail not found gtin14={} source={}", gtin14, source);
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .cacheControl(CacheControl.noCache().mustRevalidate())
                     .header("X-Product-Source", source)
