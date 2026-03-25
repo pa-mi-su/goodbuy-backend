@@ -287,7 +287,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             link = productIngredientRepo.save(link);
             product.getProductIngredients().add(link);
 
-            enqueueDeepResearchIfNeeded(ingredient, ean14, "scan_ingestion");
+            if (!skipInlineEnrichment) {
+                enqueueDeepResearchIfNeeded(ingredient, ean14, "scan_ingestion");
+            }
             linked++;
         }
 
@@ -755,6 +757,23 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         if (lower.startsWith("inactive ingredients")) return true;
         if (lower.startsWith("active ingredients")) return true;
         if (lower.startsWith("contains:")) return true;
+        if (lower.startsWith("safety tip")) return true;
+        if (lower.startsWith("keep out of reach")) return true;
+        if (lower.startsWith("distributed by")) return true;
+        if (lower.startsWith("distribuido por")) return true;
+        if (lower.startsWith("questions or comments")) return true;
+        if (lower.startsWith("made in")) return true;
+        if (lower.startsWith("compare to")) return true;
+        if (lower.startsWith("drug facts")) return true;
+        if (lower.startsWith("warning")) return true;
+        if (lower.startsWith("warnings")) return true;
+        if (lower.startsWith("directions")) return true;
+        if (lower.startsWith("purpose")) return true;
+        if (lower.startsWith("uses")) return true;
+        if (lower.startsWith("tear free")) return true;
+        if (lower.startsWith("no more tears")) return true;
+        if (lower.startsWith("no parabens")) return true;
+        if (lower.startsWith("no phthalates")) return true;
 
         return false;
     }
