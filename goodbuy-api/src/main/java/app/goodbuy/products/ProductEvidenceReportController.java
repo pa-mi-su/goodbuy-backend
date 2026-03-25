@@ -1,6 +1,7 @@
 package app.goodbuy.products;
 
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.core.products.port.ProductLookupPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -18,15 +19,18 @@ public class ProductEvidenceReportController {
     private final ProductEvidenceReportService service;
     private final ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService;
     private final ProductEvidenceAnalysisService productEvidenceAnalysisService;
+    private final ProductLookupPort productLookupPort;
 
     public ProductEvidenceReportController(
             ProductEvidenceReportService service,
             ProductIngredientEvidenceIngestionService ingredientEvidenceIngestionService,
-            ProductEvidenceAnalysisService productEvidenceAnalysisService
+            ProductEvidenceAnalysisService productEvidenceAnalysisService,
+            ProductLookupPort productLookupPort
     ) {
         this.service = service;
         this.ingredientEvidenceIngestionService = ingredientEvidenceIngestionService;
         this.productEvidenceAnalysisService = productEvidenceAnalysisService;
+        this.productLookupPort = productLookupPort;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -222,8 +226,8 @@ public class ProductEvidenceReportController {
                 entity.getStatus(),
                 entity.getAnalysisStatus(),
                 entity.getId(),
-                nextAction(entity),
-                rescanAvailableNow(entity)
+                nextAction(entity, productAvailableNow(key)),
+                rescanAvailableNow(entity, productAvailableNow(key))
         );
 
         // ✅ Always return this shape (client decodes defensively)
@@ -232,19 +236,28 @@ public class ProductEvidenceReportController {
                 entity.getStatus(),
                 true,
                 entity.getAnalysisStatus(),
-                nextAction(entity),
-                rescanAvailableNow(entity),
-                availabilityMessage(entity)
+                nextAction(entity, productAvailableNow(key)),
+                rescanAvailableNow(entity, productAvailableNow(key)),
+                availabilityMessage(entity, productAvailableNow(key))
         ));
     }
 
-    private static String nextAction(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity) {
+    private boolean productAvailableNow(String key) {
+        try {
+            return productLookupPort.findByGtin(key).isPresent();
+        } catch (Exception ex) {
+            log.warn("Product evidence status lookup readiness check failed key={} err={}", key, ex.toString());
+            return false;
+        }
+    }
+
+    private static String nextAction(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity, boolean productAvailableNow) {
         String analysisStatus = entity.getAnalysisStatus();
-        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus)) {
+        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus) || ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus) && productAvailableNow)) {
             return "RESCAN_NOW";
         }
         if ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus)) {
-            return "RESCAN_SOON";
+            return "CHECK_BACK_LATER";
         }
         if ("REVIEW_REQUIRED".equalsIgnoreCase(analysisStatus)) {
             return "WAIT_FOR_REVIEW";
@@ -255,19 +268,20 @@ public class ProductEvidenceReportController {
         return "WAIT_FOR_UPDATE";
     }
 
-    private static boolean rescanAvailableNow(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity) {
-        return "READY_TO_RESCAN".equalsIgnoreCase(entity.getAnalysisStatus());
+    private static boolean rescanAvailableNow(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity, boolean productAvailableNow) {
+        return "READY_TO_RESCAN".equalsIgnoreCase(entity.getAnalysisStatus())
+                || ("DRAFT_CREATED".equalsIgnoreCase(entity.getAnalysisStatus()) && productAvailableNow);
     }
 
-    private static String availabilityMessage(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity) {
+    private static String availabilityMessage(app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity entity, boolean productAvailableNow) {
         String analysisStatus = entity.getAnalysisStatus();
         int parsedIngredientCount = entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount();
 
-        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus)) {
+        if ("READY_TO_RESCAN".equalsIgnoreCase(analysisStatus) || ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus) && productAvailableNow)) {
             return "The draft read is ready. Scan this product again now.";
         }
         if ("DRAFT_CREATED".equalsIgnoreCase(analysisStatus)) {
-            return "We started building a draft read from these photos. Try scanning again in a minute or two.";
+            return "We are still building the draft read from these photos. Check back in a moment while we finish the product and ingredient decode.";
         }
         if ("REVIEW_REQUIRED".equalsIgnoreCase(analysisStatus)) {
             if (parsedIngredientCount > 0) {
