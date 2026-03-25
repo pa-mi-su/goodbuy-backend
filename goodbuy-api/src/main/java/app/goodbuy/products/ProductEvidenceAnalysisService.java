@@ -188,7 +188,7 @@ public class ProductEvidenceAnalysisService {
             entity.setAnalysisStatus("DRAFT_CREATED");
             entity.setLastReprocessedAt(OffsetDateTime.now());
             entity.setDraftCreatedAt(OffsetDateTime.now());
-            asyncProductIngestionService.enqueue(buildDraftDto(entity.getEan(), analysisOutcome));
+            asyncProductIngestionService.enqueue(buildDraftDto(entity, analysisOutcome));
             log.info("Analyze product evidence queued draft ean={} confidence={} ingredientCount={}", productEan, analysisOutcome.confidenceScore(), analysisOutcome.ingredients().size());
         } else {
             entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
@@ -343,7 +343,7 @@ public class ProductEvidenceAnalysisService {
         );
     }
 
-    private ProductDetailDto buildDraftDto(String ean, AnalysisOutcome outcome) {
+    private ProductDetailDto buildDraftDto(ProductEvidenceReportEntity entity, AnalysisOutcome outcome) {
         List<ProductDetailDto.IngredientDto> ingredients = outcome.ingredients().stream()
                 .map(label -> new ProductDetailDto.IngredientDto(
                         null,
@@ -355,13 +355,17 @@ public class ProductEvidenceAnalysisService {
                 ))
                 .toList();
 
+        List<ProductDetailDto.ImageDto> images = Optional.ofNullable(trimToNull(entity.getFrontImageS3Url()))
+                .map(url -> List.of(new ProductDetailDto.ImageDto(url, null, null)))
+                .orElseGet(List::of);
+
         return new ProductDetailDto(
-                ean,
+                entity.getEan(),
                 outcome.productName(),
                 outcome.brandName(),
                 outcome.category(),
                 outcome.summary(),
-                List.of(),
+                images,
                 ingredients,
                 Map.of(),
                 Map.of(),

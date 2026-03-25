@@ -3,9 +3,11 @@ package app.goodbuy.products;
 import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
 import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
+import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductEvidenceAnalyzerPort;
 import app.goodbuy.core.products.port.ProductIngredientOcrPort;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 import java.util.Optional;
@@ -29,6 +31,7 @@ class ProductEvidenceAnalysisServiceTest {
         ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
         entity.setEan("00012345678901");
         entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+        entity.setFrontImageS3Url("https://goodbuy-dev-images.s3.amazonaws.com/evidence/front.jpg");
 
         when(evidenceReportService.reportWithStatus(
                 any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
@@ -74,7 +77,11 @@ class ProductEvidenceAnalysisServiceTest {
 
         assertEquals("DRAFT_CREATED", result.analysisStatus());
         assertTrue(result.draftQueued());
-        verify(asyncService).enqueue(any());
+
+        ArgumentCaptor<ProductDetailDto> dtoCaptor = ArgumentCaptor.forClass(ProductDetailDto.class);
+        verify(asyncService).enqueue(dtoCaptor.capture());
+        assertEquals(1, dtoCaptor.getValue().images().size());
+        assertEquals("https://goodbuy-dev-images.s3.amazonaws.com/evidence/front.jpg", dtoCaptor.getValue().images().get(0).url());
     }
 
     @Test
