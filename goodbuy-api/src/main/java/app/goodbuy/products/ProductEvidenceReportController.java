@@ -216,8 +216,10 @@ public class ProductEvidenceReportController {
         }
 
         var opt = service.findActiveStatus(key, reason);
-        if (opt.isEmpty()
-                && !ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED.equalsIgnoreCase(reason)) {
+        boolean allowCrossReasonFallback =
+                ProductEvidenceReportService.REASON_MISSING_PRODUCT.equalsIgnoreCase(reason)
+                        || ProductEvidenceReportService.REASON_OUT_OF_DOMAIN.equalsIgnoreCase(reason);
+        if (opt.isEmpty() && allowCrossReasonFallback) {
             opt = service.findActiveStatus(key, ProductEvidenceReportService.REASON_ANALYSIS_REQUESTED);
         }
 
