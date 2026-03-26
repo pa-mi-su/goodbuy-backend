@@ -13,7 +13,9 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -67,7 +69,65 @@ class ProductIngredientEvidenceIngestionServiceTest {
         assertTrue(result.reprocessQueued());
         assertEquals("DRAFT_CREATED", result.status());
         assertEquals("DRAFT_CREATED", result.analysisStatus());
-        verify(asyncService).enqueue(any(ProductDetailDto.class));
+        verify(asyncService).enqueue(argThat(dto ->
+                dto != null
+                        && "00012345678901".equals(dto.gtin())
+                        && "AI-PRODUCT-INTAKE".equals(dto.source())
+                        && dto.ingredients() != null
+                        && dto.ingredients().size() == 4
+                        && dto.images() != null
+                        && dto.images().isEmpty()
+        ));
+        verify(evidenceReportRepository).save(entity);
+    }
+
+    @Test
+    void doesNotQueueReprocessWhenIngredientTextIsUnreadable() {
+        ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
+        ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
+        ProductLookupPort lookupPort = mock(ProductLookupPort.class);
+        AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+
+        ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
+        entity.setEan("00012345678901");
+        entity.setReason(ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS);
+        entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+        entity.setProductName("Demo Product");
+        entity.setBrand("Brand");
+
+        when(evidenceReportService.reportWithStatus(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn(new ProductEvidenceReportService.ProductEvidenceReportResult(entity, true));
+        when(evidenceReportRepository.save(any(ProductEvidenceReportEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(lookupPort.findByGtin("00012345678901")).thenReturn(Optional.of(existingDto()));
+
+        ProductIngredientEvidenceIngestionService service = new ProductIngredientEvidenceIngestionService(
+                evidenceReportService,
+                evidenceReportRepository,
+                Optional.of(lookupPort),
+                asyncService,
+                Optional.empty()
+        );
+
+        var result = service.ingest(
+                "00012345678901",
+                "Demo Product",
+                "Brand",
+                "1.0",
+                "ios",
+                "user submitted label",
+                "Warning: Keep out of reach of children.",
+                null,
+                null,
+                null,
+                null
+        );
+
+        assertEquals("LOW_CONFIDENCE", result.ocrStatus());
+        assertEquals(1, result.parsedIngredientCount());
+        assertFalse(result.reprocessQueued());
+        assertEquals("REVIEW_REQUIRED", result.status());
+        assertEquals("REVIEW_REQUIRED", result.analysisStatus());
         verify(evidenceReportRepository).save(entity);
     }
 
