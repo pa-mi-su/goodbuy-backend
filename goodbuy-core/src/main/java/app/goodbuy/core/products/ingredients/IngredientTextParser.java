@@ -52,6 +52,8 @@ public final class IngredientTextParser {
         normalized = normalized.replaceFirst("(?i)^\\s*ingredients\\s*:\\s*", "");
         normalized = normalized.replaceFirst("(?i)^\\s*other\\s+ingredients\\s*:\\s*", "");
         normalized = normalized.replaceFirst("(?i)^\\s*inactive\\s+ingredients\\s*:\\s*", "");
+        normalized = normalized.replaceAll("(?i)\\bonly\\s+\\d+\\s+ingredients\\b", ",");
+        normalized = normalized.replaceAll("(?<=[A-Za-z\\)])\\s+(?=\\d{1,3}[.)]\\s*[A-Za-z])", ", ");
 
         return normalized.trim();
     }
