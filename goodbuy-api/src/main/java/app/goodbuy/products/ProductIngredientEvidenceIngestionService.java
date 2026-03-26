@@ -85,6 +85,7 @@ public class ProductIngredientEvidenceIngestionService {
         entity.setOcrProvider(outcome.provider());
         entity.setOcrRawText(outcome.rawText());
         entity.setParsedIngredientText(outcome.parsedText());
+        entity.setParsedIngredientCount(outcome.ingredients().size());
 
         boolean queued = false;
         if (outcome.allowAutoReprocess() && !outcome.ingredients().isEmpty()) {
@@ -95,11 +96,15 @@ public class ProductIngredientEvidenceIngestionService {
                     outcome.ingredients()
             );
             entity.setStatus(ProductEvidenceReportService.STATUS_IN_PROGRESS);
+            entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_ANALYZING);
             entity.setLastReprocessedAt(OffsetDateTime.now());
             asyncProductIngestionService.enqueue(reprocessDto);
             queued = true;
             log.info("ProductIngredientEvidenceIngestionService: queued reprocess ean={} ingredientCount={}",
                     entity.getEan(), outcome.ingredients().size());
+        } else {
+            entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
+            entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
         }
 
         evidenceReportRepository.save(entity);
