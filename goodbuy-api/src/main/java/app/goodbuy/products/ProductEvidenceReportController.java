@@ -98,6 +98,8 @@ public class ProductEvidenceReportController {
                 backImage == null ? null : backImage.getContentType()
         );
 
+        boolean ingredientReadReady = ingredientReadAvailableNow(productEan);
+
         return new ProductIngredientEvidenceResponse(
                 result.reportId(),
                 !result.isNewReport(),
@@ -106,11 +108,11 @@ public class ProductEvidenceReportController {
                 result.reprocessQueued(),
                 result.status(),
                 result.analysisStatus(),
-                ingredientRecoveryNextAction(result.analysisStatus(), ingredientReadAvailableNow(productEan)),
-                ingredientReadAvailableNow(productEan),
+                ingredientRecoveryNextAction(result.analysisStatus(), ingredientReadReady),
+                ingredientReadReady,
                 ingredientRecoveryAvailabilityMessage(
                         result.analysisStatus(),
-                        ingredientReadAvailableNow(productEan),
+                        ingredientReadReady,
                         result.parsedIngredientCount()
                 )
         );
@@ -230,6 +232,8 @@ public class ProductEvidenceReportController {
         }
 
         var entity = opt.get();
+        boolean readyNow = evidenceReadyNow(entity, key);
+
         log.info(
                 "Product evidence status found resolvedKey={} reason={} entityStatus={} analysisStatus={} reportId={} nextAction={} rescanAvailableNow={}",
                 key,
@@ -237,8 +241,8 @@ public class ProductEvidenceReportController {
                 entity.getStatus(),
                 entity.getAnalysisStatus(),
                 entity.getId(),
-                nextAction(entity, evidenceReadyNow(entity, key)),
-                rescanAvailableNow(entity, evidenceReadyNow(entity, key))
+                nextAction(entity, readyNow),
+                rescanAvailableNow(entity, readyNow)
         );
 
         // ✅ Always return this shape (client decodes defensively)
@@ -247,9 +251,9 @@ public class ProductEvidenceReportController {
                 entity.getStatus(),
                 true,
                 entity.getAnalysisStatus(),
-                nextAction(entity, evidenceReadyNow(entity, key)),
-                rescanAvailableNow(entity, evidenceReadyNow(entity, key)),
-                availabilityMessage(entity, evidenceReadyNow(entity, key)),
+                nextAction(entity, readyNow),
+                rescanAvailableNow(entity, readyNow),
+                availabilityMessage(entity, readyNow),
                 entity.getParsedIngredientCount() == null ? 0 : entity.getParsedIngredientCount()
         ));
     }
