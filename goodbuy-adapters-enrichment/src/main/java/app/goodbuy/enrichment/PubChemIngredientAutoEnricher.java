@@ -121,7 +121,7 @@ public class PubChemIngredientAutoEnricher implements IngredientAutoEnricherPort
             LookupCidResult cidRes = lookupCidByName(query);
 
             if (cidRes == null || cidRes.cid() == null) {
-                log.info("PubChem enrich NO_CID canonicalKey='{}' query='{}'", canonicalKey, queryForTokens);
+                log.debug("PubChem enrich NO_CID canonicalKey='{}' query='{}'", canonicalKey, queryForTokens);
                 return notEnriched("no_cid");
             }
 
@@ -331,7 +331,7 @@ public class PubChemIngredientAutoEnricher implements IngredientAutoEnricherPort
 
             int status = resp.statusCode();
             if (status == 404) {
-                log.info("PubChem CID lookup {} 404 query='{}'", tierTag, sanitizeTokenValue(q));
+                log.debug("PubChem CID lookup {} 404 query='{}'", tierTag, sanitizeTokenValue(q));
                 return null;
             }
             if (status < 200 || status >= 300) {
@@ -379,11 +379,11 @@ public class PubChemIngredientAutoEnricher implements IngredientAutoEnricherPort
 
             int status = resp.statusCode();
             if (status == 404) {
-                log.info("PubChem SUBSTANCE->CID {} 404 query='{}'", tierTag, sanitizeTokenValue(q));
+                log.debug("PubChem SUBSTANCE->CID {} 404 query='{}'", tierTag, sanitizeTokenValue(q));
                 return null;
             }
             if (status < 200 || status >= 300) {
-                log.info("PubChem SUBSTANCE->CID {} non-2xx status={} query='{}'", tierTag, status, sanitizeTokenValue(q));
+                log.debug("PubChem SUBSTANCE->CID {} non-2xx status={} query='{}'", tierTag, status, sanitizeTokenValue(q));
                 return null;
             }
 

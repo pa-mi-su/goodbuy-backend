@@ -24,21 +24,29 @@ public class ProductEvidenceReportService {
     public static final String REASON_MISSING_PRODUCT = "missing_product";
     public static final String REASON_UNCLEAR_INGREDIENTS = "unclear_ingredients";
     public static final String REASON_OUT_OF_DOMAIN = "out_of_domain";
+    public static final String REASON_ANALYSIS_REQUESTED = "analysis_requested";
 
     private static final Set<String> ALLOWED_REASONS = Set.of(
             REASON_MISSING_PRODUCT,
             REASON_UNCLEAR_INGREDIENTS,
-            REASON_OUT_OF_DOMAIN
+            REASON_OUT_OF_DOMAIN,
+            REASON_ANALYSIS_REQUESTED
     );
 
     // ✅ Statuses that mean “already reported / active”
     public static final String STATUS_REPORTED = "REPORTED";
     public static final String STATUS_IN_PROGRESS = "IN_PROGRESS";
     public static final String STATUS_RESOLVED = "RESOLVED";
+    public static final String STATUS_ANALYZING = "ANALYZING";
+    public static final String STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED";
+    public static final String STATUS_DRAFT_CREATED = "DRAFT_CREATED";
 
     private static final List<String> ACTIVE_STATUSES = List.of(
             STATUS_REPORTED,
-            STATUS_IN_PROGRESS
+            STATUS_IN_PROGRESS,
+            STATUS_ANALYZING,
+            STATUS_REVIEW_REQUIRED,
+            STATUS_DRAFT_CREATED
     );
 
     private final ProductEvidenceReportRepository repo;

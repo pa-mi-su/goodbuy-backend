@@ -8,6 +8,8 @@ import java.util.Set;
 
 public final class IngredientTextParser {
 
+    private static final int MAX_TOKEN_LENGTH = 220;
+
     private IngredientTextParser() {}
 
     public static List<String> parse(String rawText) {
@@ -50,6 +52,8 @@ public final class IngredientTextParser {
         normalized = normalized.replaceFirst("(?i)^\\s*ingredients\\s*:\\s*", "");
         normalized = normalized.replaceFirst("(?i)^\\s*other\\s+ingredients\\s*:\\s*", "");
         normalized = normalized.replaceFirst("(?i)^\\s*inactive\\s+ingredients\\s*:\\s*", "");
+        normalized = normalized.replaceAll("(?i)\\bonly\\s+\\d+\\s+ingredients\\b", ",");
+        normalized = normalized.replaceAll("(?<=[A-Za-z\\)])\\s+(?=\\d{1,3}[.)]\\s*[A-Za-z])", ", ");
 
         return normalized.trim();
     }
@@ -127,9 +131,14 @@ public final class IngredientTextParser {
 
     private static String cleanToken(String token) {
         String cleaned = token == null ? "" : token.trim();
+        cleaned = cleaned.replaceFirst("^(?:\\(?\\d{1,3}[.)]|\\d{1,3}\\s*[-:])\\s*", "");
+        cleaned = cleaned.replaceFirst("^(?:[a-zA-Z][.)])\\s*", "");
         cleaned = cleaned.replaceAll("\\s+", " ");
         cleaned = cleaned.replaceAll("^[,:\\-\\s]+", "");
         cleaned = cleaned.replaceAll("[,;:.\\s]+$", "");
+        if (cleaned.length() > MAX_TOKEN_LENGTH) {
+            cleaned = cleaned.substring(0, MAX_TOKEN_LENGTH).trim();
+        }
         return cleaned.trim();
     }
 }

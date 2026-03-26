@@ -53,6 +53,7 @@ import java.util.regex.Pattern;
 public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     private static final Logger log = LoggerFactory.getLogger(DbProductSnapshotAdapter.class);
+    private static final int INGREDIENT_TEXT_DB_MAX = 255;
 
     /**
      * NOTE: adapters-core must not reference concrete implementations from other modules.
@@ -168,9 +169,12 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         boolean enabled = domainConfig.isEnabled(domainCode);
         boolean rated = domainConfig.isRated(domainCode);
+        boolean skipInlineEnrichment = "AI-PRODUCT-INTAKE".equalsIgnoreCase(safe(dto.source()));
 
         log.info("saveSnapshot: classified domain={} enabled={} rated={} gtin={}",
                 domainCode, enabled, rated, ean14);
+        log.info("saveSnapshot: source={} skipInlineEnrichment={} gtin={}",
+                safe(dto.source()), skipInlineEnrichment, ean14);
 
         // ───────────── IMAGE SELECTION + S3 MIRROR ─────────────
         List<ProductDetailDto.ImageDto> images = dto.images();
@@ -239,7 +243,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         for (ProductDetailDto.IngredientDto ing : dtoIngredients) {
             if (ing == null) continue;
 
-            String displayName = firstNonBlank(ing.original(), ing.canonical(), ing.id());
+            String displayName = trimToDbText(firstNonBlank(ing.original(), ing.canonical(), ing.id()));
             if (displayName == null) continue;
 
             if (isNonIngredientToken(displayName)) {
@@ -267,7 +271,8 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
                     canonicalKey,
                     displayName,
                     ean14,
-                    ing.externalIds()
+                    ing.externalIds(),
+                    skipInlineEnrichment
             );
 
             if (ingredient == null || ingredient.getId() == null) {
@@ -283,7 +288,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             link = productIngredientRepo.save(link);
             product.getProductIngredients().add(link);
 
-            enqueueDeepResearchIfNeeded(ingredient, ean14, "scan_ingestion");
+            if (!skipInlineEnrichment) {
+                enqueueDeepResearchIfNeeded(ingredient, ean14, "scan_ingestion");
+            }
             linked++;
         }
 
@@ -313,7 +320,8 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
             String canonicalKey,
             String displayName,
             String productEan,
-            Map<String, String> externalIds
+            Map<String, String> externalIds,
+            boolean skipInlineEnrichment
     ) {
         if (isNonIngredientToken(canonicalKey) || isNonIngredientToken(displayName)) {
             log.info("resolveOrCreateIngredient: skipping non-ingredient token canonicalKey='{}' displayName='{}' ean={}",
@@ -333,7 +341,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
 
         if (ingredient != null) {
-            if (shouldAttemptEnrichmentOnExisting(ingredient) && autoEnricher != null) {
+            if (!skipInlineEnrichment && shouldAttemptEnrichmentOnExisting(ingredient) && autoEnricher != null) {
                 tryEnrichExistingIngredient(ingredient, canonicalKey, displayName, productEan, externalIds);
             }
             return ingredient;
@@ -344,7 +352,10 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
         String enrichmentQuery = deriveEnrichmentQuery(displayName, canonicalKey);
 
-        if (autoEnricher == null) {
+        if (skipInlineEnrichment) {
+            log.info("resolveOrCreateIngredient: auto-enrich SKIPPED (ai draft fast path) canonicalKey='{}' ean={}",
+                    canonicalKey, productEan);
+        } else if (autoEnricher == null) {
             log.info("resolveOrCreateIngredient: auto-enrich SKIPPED (no enricher wired) canonicalKey='{}' ean={}",
                     canonicalKey, productEan);
         } else {
@@ -379,9 +390,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
 
         Ingredient created = new Ingredient();
-        created.setCanonicalKey(canonicalKey);
+        created.setCanonicalKey(trimToDbText(canonicalKey));
         created.setActive(true);
-        created.setDisplayName(firstNonBlank(displayName, canonicalKey));
+        created.setDisplayName(trimToDbText(firstNonBlank(displayName, canonicalKey)));
         if (providerEnriched && enr != null) {
             applyEnrichmentToIngredient(created, enr, displayName);
         }
@@ -690,7 +701,20 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private static String normalizeCanonicalKey(String raw) {
         String x = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
         x = x.replaceAll("\\s+", " ");
+        if (x.length() > INGREDIENT_TEXT_DB_MAX) {
+            x = x.substring(0, INGREDIENT_TEXT_DB_MAX).trim();
+        }
         return x;
+    }
+
+    private static String trimToDbText(String raw) {
+        if (raw == null) return null;
+        String value = raw.trim();
+        if (value.isEmpty()) return null;
+        if (value.length() > INGREDIENT_TEXT_DB_MAX) {
+            value = value.substring(0, INGREDIENT_TEXT_DB_MAX).trim();
+        }
+        return value;
     }
 
     private static String buildRawIngredientText(List<ProductDetailDto.IngredientDto> ingredients) {
@@ -747,6 +771,23 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         if (lower.startsWith("inactive ingredients")) return true;
         if (lower.startsWith("active ingredients")) return true;
         if (lower.startsWith("contains:")) return true;
+        if (lower.startsWith("safety tip")) return true;
+        if (lower.startsWith("keep out of reach")) return true;
+        if (lower.startsWith("distributed by")) return true;
+        if (lower.startsWith("distribuido por")) return true;
+        if (lower.startsWith("questions or comments")) return true;
+        if (lower.startsWith("made in")) return true;
+        if (lower.startsWith("compare to")) return true;
+        if (lower.startsWith("drug facts")) return true;
+        if (lower.startsWith("warning")) return true;
+        if (lower.startsWith("warnings")) return true;
+        if (lower.startsWith("directions")) return true;
+        if (lower.startsWith("purpose")) return true;
+        if (lower.startsWith("uses")) return true;
+        if (lower.startsWith("tear free")) return true;
+        if (lower.startsWith("no more tears")) return true;
+        if (lower.startsWith("no parabens")) return true;
+        if (lower.startsWith("no phthalates")) return true;
 
         return false;
     }
