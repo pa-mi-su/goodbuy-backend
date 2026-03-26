@@ -4,7 +4,7 @@ import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
 import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
-import app.goodbuy.core.products.ingredients.IngredientTextParser;
+import app.goodbuy.core.products.ingredients.RecoveredIngredientExtractor;
 import app.goodbuy.core.products.port.ProductIngredientOcrPort;
 import app.goodbuy.core.products.port.ProductLookupPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
@@ -184,7 +184,7 @@ public class ProductIngredientEvidenceIngestionService {
             status = "NOT_AVAILABLE";
         }
 
-        List<String> ingredients = IngredientTextParser.parse(rawText);
+        List<String> ingredients = RecoveredIngredientExtractor.extract(rawText);
         String parsedText = ingredients.isEmpty() ? null : String.join(", ", ingredients);
         boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission);
 
