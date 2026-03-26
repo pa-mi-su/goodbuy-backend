@@ -147,6 +147,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                         && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("squirt"))
                         && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("clean away"))
                         && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("greasier"))
+                        && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("(plant-derived"))
         ));
     }
 
@@ -265,7 +266,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
         verify(snapshotPort).saveSnapshot(argThat(dto ->
                 dto != null
                         && dto.ingredients() != null
-                        && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("(plant-derived surfactant)"))
+                        && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("(plant-derived"))
         ));
     }
 

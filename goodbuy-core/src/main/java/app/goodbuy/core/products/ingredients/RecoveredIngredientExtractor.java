@@ -64,7 +64,10 @@ public final class RecoveredIngredientExtractor {
             if (trimmed == null || !looksLikeIngredientCandidate(trimmed)) {
                 continue;
             }
-            filtered.add(trimmed);
+            String normalized = normalizeCandidate(trimmed);
+            if (normalized != null && looksLikeIngredientCandidate(normalized)) {
+                filtered.add(normalized);
+            }
         }
         return filtered.stream().distinct().limit(64).toList();
     }
@@ -203,6 +206,35 @@ public final class RecoveredIngredientExtractor {
             }
         }
         return false;
+    }
+
+    private static String normalizeCandidate(String value) {
+        String trimmed = trimToNull(value);
+        if (trimmed == null) {
+            return null;
+        }
+
+        var matcher = java.util.regex.Pattern.compile("^(.*?)\\s*\\(([^)]*)\\)\\s*$").matcher(trimmed);
+        if (matcher.matches()) {
+            String base = trimToNull(matcher.group(1));
+            String qualifier = trimToNull(matcher.group(2));
+            if (base != null && qualifier != null) {
+                String qualifierLower = qualifier.toLowerCase(Locale.ROOT);
+                if (qualifierLower.contains(",")
+                        || containsAny(qualifierLower,
+                        "plant-derived",
+                        "naturally derived",
+                        "surfactant",
+                        "preservative",
+                        "fragrance",
+                        "base ingredient",
+                        "cleaning agent")) {
+                    return base;
+                }
+            }
+        }
+
+        return trimmed;
     }
 
     private static String trimToNull(String value) {
