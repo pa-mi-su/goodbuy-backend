@@ -43,6 +43,42 @@ class ProductViewTest {
         assertEquals("A", view.ingredients().get(0).ratingLetter());
     }
 
+    @Test
+    void filtersStandaloneQualifierFragmentsFromIngredientView() {
+        IngredientReadService ingredientReadService = mock(IngredientReadService.class);
+        when(ingredientReadService.searchRanked("Water", false)).thenReturn(Optional.empty());
+        when(ingredientReadService.searchRanked("(plant-derived surfactant)", false)).thenReturn(Optional.empty());
+
+        ProductView view = ProductView.of(
+                new ProductDetailDto(
+                        "00749174097279",
+                        "Dishmate Liquid, Lavender - 25 fl oz",
+                        "ECOS",
+                        "Dish Detergent & Soap",
+                        null,
+                        List.of(),
+                        List.of(
+                                new ProductDetailDto.IngredientDto(null, "Water", null, Map.of(), null, null),
+                                new ProductDetailDto.IngredientDto(null, "(plant-derived surfactant)", null, Map.of(), null, null)
+                        ),
+                        Map.of(),
+                        Map.of(),
+                        "AI-PRODUCT-INTAKE",
+                        "personal-care",
+                        null,
+                        "NR"
+                ),
+                "AI-PRODUCT-INTAKE",
+                ingredientReadService,
+                true,
+                "personal-care",
+                List.of()
+        );
+
+        assertEquals(1, view.ingredients().size());
+        assertEquals("Water", view.ingredients().get(0).name());
+    }
+
     private static ProductDetailDto dto() {
         return new ProductDetailDto(
                 "00016500586579",
