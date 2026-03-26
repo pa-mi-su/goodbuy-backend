@@ -192,6 +192,7 @@ public class ProductIngredientEvidenceIngestionService {
         }
 
         List<String> ocrIngredients = RecoveredIngredientExtractor.extract(rawText);
+        Integer expectedIngredientCount = RecoveredIngredientExtractor.expectedIngredientCount(rawText);
         List<String> ingredients = mergeAiRecoveredIngredients(
                 entity.getEan(),
                 firstNonBlank(entity.getProductName()),
@@ -203,19 +204,23 @@ public class ProductIngredientEvidenceIngestionService {
                 backImageBytes != null && backImageBytes.length > 0
         );
         String parsedText = ingredients.isEmpty() ? null : String.join(", ", ingredients);
-        boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission);
+        boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission, expectedIngredientCount);
 
         if (rawText != null && ingredients.isEmpty()) {
             status = "PARSE_EMPTY";
         } else if (rawText != null && !allowAutoReprocess) {
-            status = "LOW_CONFIDENCE";
+            status = lowCoverage(expectedIngredientCount, ingredients) ? "LOW_COVERAGE" : "LOW_CONFIDENCE";
         }
 
         return new OcrOutcome(status, provider, rawText, parsedText, ingredients, allowAutoReprocess);
     }
 
-    private static boolean shouldAutoReprocess(String rawText, List<String> ingredients, boolean manualSubmission) {
+    private static boolean shouldAutoReprocess(String rawText, List<String> ingredients, boolean manualSubmission, Integer expectedIngredientCount) {
         if (rawText == null || rawText.isBlank() || ingredients == null || ingredients.isEmpty()) {
+            return false;
+        }
+
+        if (lowCoverage(expectedIngredientCount, ingredients)) {
             return false;
         }
 
@@ -234,6 +239,15 @@ public class ProductIngredientEvidenceIngestionService {
         boolean markerBackedShortList = hasIngredientMarker && ingredients.size() >= 3;
 
         return enoughParsedIngredients || markerBackedShortList;
+    }
+
+    private static boolean lowCoverage(Integer expectedIngredientCount, List<String> ingredients) {
+        if (expectedIngredientCount == null || expectedIngredientCount < 4 || ingredients == null) {
+            return false;
+        }
+        int parsedCount = ingredients.size();
+        int minimumExpected = Math.max(4, (int) Math.ceil(expectedIngredientCount * 0.6d));
+        return parsedCount < minimumExpected;
     }
 
     private List<String> mergeAiRecoveredIngredients(

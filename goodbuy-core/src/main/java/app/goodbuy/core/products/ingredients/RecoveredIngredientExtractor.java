@@ -3,8 +3,12 @@ package app.goodbuy.core.products.ingredients;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class RecoveredIngredientExtractor {
+    private static final Pattern DECLARED_INGREDIENT_COUNT = Pattern.compile("\\bonly\\s+(\\d{1,3})\\s+ingredients\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NUMBERED_INGREDIENT_MARKER = Pattern.compile("\\b(\\d{1,3})[.)]\\s*[a-z]", Pattern.CASE_INSENSITIVE);
 
     private static final List<String> INGREDIENT_SECTION_MARKERS = List.of(
             "ingredients:",
@@ -55,6 +59,28 @@ public final class RecoveredIngredientExtractor {
 
     public static List<String> normalizeCandidates(List<String> values) {
         return filterEvidenceIngredients(values);
+    }
+
+    public static Integer expectedIngredientCount(String rawText) {
+        String text = trimToNull(rawText);
+        if (text == null) {
+            return null;
+        }
+
+        Matcher declared = DECLARED_INGREDIENT_COUNT.matcher(text);
+        if (declared.find()) {
+            return parsePositiveInt(declared.group(1));
+        }
+
+        Matcher numbered = NUMBERED_INGREDIENT_MARKER.matcher(text);
+        int max = 0;
+        while (numbered.find()) {
+            Integer candidate = parsePositiveInt(numbered.group(1));
+            if (candidate != null && candidate > max) {
+                max = candidate;
+            }
+        }
+        return max >= 3 ? max : null;
     }
 
     private static List<String> filterEvidenceIngredients(List<String> values) {
@@ -247,5 +273,14 @@ public final class RecoveredIngredientExtractor {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static Integer parsePositiveInt(String value) {
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 }

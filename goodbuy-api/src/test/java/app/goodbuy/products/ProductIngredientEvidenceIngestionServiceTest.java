@@ -131,7 +131,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 "user submitted label",
                 """
                 Squirt a quarter-size drop onto a sponge and clean away! Increase the amount for greasier items.
-                ONLY 11 INGREDIENTS
+                ONLY 5 INGREDIENTS
                 Ingredients: 1. Water 2. Sodium Coco-Sulfate (plant-derived,surfactant) 3. Cocamidopropylamine Oxide
                 4. Lauramine Oxide (plant-derived) 5. Phenoxyethanol
                 """,
@@ -196,7 +196,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 "user submitted label",
                 """
                 Squirt a quarter-size drop onto a sponge and clean away! Increase the amount for greasier items.
-                ONLY 11 INGREDIENTS
+                ONLY 5 INGREDIENTS
                 1. Water 2. Sodium Coco-Sulfate (plant-derived,surfactant) 3. Cocamidopropylamine Oxide
                 4. Lauramine Oxide (plant-derived) 5. Phenoxyethanol
                 """,
@@ -252,7 +252,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 "ios",
                 "user submitted label",
                 """
-                ONLY 11 INGREDIENTS
+                ONLY 5 INGREDIENTS
                 1. Water
                 2. Sodium Coco-Sulfate (plant-derived,surfactant)
                 3. Cocamidopropylamine Oxide
@@ -443,7 +443,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 "ios",
                 "user submitted label",
                 """
-                ONLY 11 INGREDIENTS
+                ONLY 5 INGREDIENTS
                 1. Water
                 2. Sodium Coco-Sulfate (plant-derived,surfactant)
                 3. Cocamidopropylamine Oxide
@@ -464,6 +464,82 @@ class ProductIngredientEvidenceIngestionServiceTest {
                         && dto.ingredients().stream().anyMatch(ing -> "Sodium Coco-Sulfate".equals(ing.original()))
                         && dto.ingredients().stream().noneMatch(ing -> ing.original().contains("(plant-derived"))
         ));
+    }
+
+    @Test
+    void doesNotPublishRecoveredReadWhenCoverageIsTooLowForDeclaredCount() {
+        ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
+        ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
+        ProductLookupPort lookupPort = mock(ProductLookupPort.class);
+        ExternalCatalogClient externalCatalogClient = mock(ExternalCatalogClient.class);
+        AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
+        ProductEvidenceAnalyzerPort analyzerPort = mock(ProductEvidenceAnalyzerPort.class);
+
+        ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
+        entity.setEan("00749174097279");
+        entity.setReason(ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS);
+        entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+        entity.setProductName("Dishmate Liquid, Lavender - 25 fl oz");
+        entity.setBrand("ECOS");
+
+        when(evidenceReportService.reportWithStatus(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn(new ProductEvidenceReportService.ProductEvidenceReportResult(entity, true));
+        when(evidenceReportRepository.save(any(ProductEvidenceReportEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(lookupPort.findByGtin("00749174097279")).thenReturn(Optional.of(existingDto()));
+        when(analyzerPort.analyze(any())).thenReturn(Optional.of(
+                new ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisResult(
+                        "OPENAI",
+                        "Dishmate Liquid, Lavender - 25 fl oz",
+                        "ECOS",
+                        "cleaning",
+                        "Dish Detergent & Soap",
+                        List.of("Water", "Sodium Coco-Sulfate", "Cocamidopropylamine Oxide", "Lauramine Oxide", "Phenoxyethanol"),
+                        91,
+                        "high",
+                        "Partial ingredient list extracted from the label.",
+                        "{\"ok\":true}"
+                )
+        ));
+
+        ProductIngredientEvidenceIngestionService service = new ProductIngredientEvidenceIngestionService(
+                evidenceReportService,
+                evidenceReportRepository,
+                Optional.of(lookupPort),
+                Optional.of(externalCatalogClient),
+                asyncService,
+                Optional.empty(),
+                Optional.of(snapshotPort),
+                Optional.of(analyzerPort)
+        );
+
+        var result = service.ingest(
+                "00749174097279",
+                "Dishmate Liquid, Lavender - 25 fl oz",
+                "ECOS",
+                "1.0",
+                "ios",
+                "user submitted label",
+                """
+                ONLY 11 INGREDIENTS
+                1. Water
+                2. Sodium Coco-Sulfate (plant-derived,surfactant)
+                3. Cocamidopropylamine Oxide
+                4. Lauramine Oxide (plant-derived)
+                5. Phenoxyethanol
+                """,
+                null,
+                null,
+                null,
+                null
+        );
+
+        assertEquals("LOW_COVERAGE", result.ocrStatus());
+        assertEquals(5, result.parsedIngredientCount());
+        assertFalse(result.reprocessQueued());
+        assertEquals("REVIEW_REQUIRED", result.status());
+        assertEquals("REVIEW_REQUIRED", result.analysisStatus());
     }
 
     private static ProductDetailDto existingDto() {
