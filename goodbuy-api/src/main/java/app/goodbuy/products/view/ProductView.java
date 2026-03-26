@@ -97,7 +97,7 @@ public record ProductView(
                     .filter(Objects::nonNull)
                     .map(i -> {
                         String label = resolveLabel(i);
-                        if (label == null || label.isBlank()) return null;
+                        if (!isDisplayableIngredientLabel(label)) return null;
 
                         return new ProductIngredientView(
                                 label,
@@ -117,7 +117,7 @@ public record ProductView(
                     .filter(Objects::nonNull)
                     .map(i -> {
                         String label = resolveLabel(i);
-                        if (label == null || label.isBlank()) return null;
+                        if (!isDisplayableIngredientLabel(label)) return null;
 
                         // Search by stable canonical key first (then canonical, then label).
                         String searchKey = firstNonBlank(
@@ -242,6 +242,30 @@ public record ProductView(
         if (i.canonical() != null && !i.canonical().isBlank()) return i.canonical().trim();
         if (i.id() != null && !i.id().isBlank()) return i.id().trim();
         return null;
+    }
+
+    private static boolean isDisplayableIngredientLabel(String label) {
+        if (label == null) return false;
+        String trimmed = label.trim();
+        if (trimmed.isEmpty()) return false;
+
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        if (lower.matches("^\\([^)]*\\)$")) {
+            return false;
+        }
+        if (trimmed.startsWith("(") && containsAny(lower, "plant-derived", "surfactant", "preservative", "fragrance")) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean containsAny(String lower, String... values) {
+        for (String value : values) {
+            if (lower.contains(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String firstNonBlank(String... vals) {

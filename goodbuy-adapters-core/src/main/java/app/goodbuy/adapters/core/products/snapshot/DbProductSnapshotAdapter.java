@@ -53,6 +53,7 @@ import java.util.regex.Pattern;
 public class DbProductSnapshotAdapter implements ProductSnapshotPort {
 
     private static final Logger log = LoggerFactory.getLogger(DbProductSnapshotAdapter.class);
+    private static final int INGREDIENT_TEXT_DB_MAX = 255;
 
     /**
      * NOTE: adapters-core must not reference concrete implementations from other modules.
@@ -242,7 +243,7 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         for (ProductDetailDto.IngredientDto ing : dtoIngredients) {
             if (ing == null) continue;
 
-            String displayName = firstNonBlank(ing.original(), ing.canonical(), ing.id());
+            String displayName = trimToDbText(firstNonBlank(ing.original(), ing.canonical(), ing.id()));
             if (displayName == null) continue;
 
             if (isNonIngredientToken(displayName)) {
@@ -389,9 +390,9 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
         }
 
         Ingredient created = new Ingredient();
-        created.setCanonicalKey(canonicalKey);
+        created.setCanonicalKey(trimToDbText(canonicalKey));
         created.setActive(true);
-        created.setDisplayName(firstNonBlank(displayName, canonicalKey));
+        created.setDisplayName(trimToDbText(firstNonBlank(displayName, canonicalKey)));
         if (providerEnriched && enr != null) {
             applyEnrichmentToIngredient(created, enr, displayName);
         }
@@ -700,7 +701,20 @@ public class DbProductSnapshotAdapter implements ProductSnapshotPort {
     private static String normalizeCanonicalKey(String raw) {
         String x = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
         x = x.replaceAll("\\s+", " ");
+        if (x.length() > INGREDIENT_TEXT_DB_MAX) {
+            x = x.substring(0, INGREDIENT_TEXT_DB_MAX).trim();
+        }
         return x;
+    }
+
+    private static String trimToDbText(String raw) {
+        if (raw == null) return null;
+        String value = raw.trim();
+        if (value.isEmpty()) return null;
+        if (value.length() > INGREDIENT_TEXT_DB_MAX) {
+            value = value.substring(0, INGREDIENT_TEXT_DB_MAX).trim();
+        }
+        return value;
     }
 
     private static String buildRawIngredientText(List<ProductDetailDto.IngredientDto> ingredients) {

@@ -512,6 +512,8 @@ public class ProductEvidenceAnalysisService {
                 "distributed by",
                 "compare to",
                 "safety tip",
+                "only 11 ingredients",
+                "only ingredients",
                 "tear free",
                 "no more tears",
                 "hypoallergenic",
@@ -523,8 +525,19 @@ public class ProductEvidenceAnalysisService {
                 "no phthalates",
                 "sulfates or dyes",
                 "j&jci",
-                "questions or comments"
+                "questions or comments",
+                "squirt a",
+                "clean away",
+                "increase the amount",
+                "greasier items",
+                "onto a sponge",
+                "how to use",
+                "use a little",
+                "apply to"
         )) {
+            return false;
+        }
+        if (lower.matches(".*\\b(squirt|clean|increase|apply|use|rub|rinse|wipe)\\b.*")) {
             return false;
         }
         if (lower.startsWith("no ") || lower.startsWith("free of ") || lower.startsWith("free from ")) {

@@ -4,19 +4,25 @@ import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
 import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
-import app.goodbuy.core.products.ingredients.IngredientTextParser;
+import app.goodbuy.core.products.ingredients.RecoveredIngredientExtractor;
+import app.goodbuy.core.products.port.ProductEvidenceAnalyzerPort;
 import app.goodbuy.core.products.port.ProductIngredientOcrPort;
 import app.goodbuy.core.products.port.ProductLookupPort;
+import app.goodbuy.core.products.port.ProductSnapshotPort;
+import app.goodbuy.core.products.StrictProductIngestionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class ProductIngredientEvidenceIngestionService {
@@ -26,21 +32,30 @@ public class ProductIngredientEvidenceIngestionService {
     private final ProductEvidenceReportService evidenceReportService;
     private final ProductEvidenceReportRepository evidenceReportRepository;
     private final ProductLookupPort productLookupPort;
+    private final app.goodbuy.core.products.port.ExternalCatalogClient externalCatalogClient;
     private final AsyncProductIngestionService asyncProductIngestionService;
     private final ProductIngredientOcrPort ingredientOcrPort;
+    private final ProductSnapshotPort productSnapshotPort;
+    private final ProductEvidenceAnalyzerPort analyzerPort;
 
     public ProductIngredientEvidenceIngestionService(
             ProductEvidenceReportService evidenceReportService,
             ProductEvidenceReportRepository evidenceReportRepository,
             Optional<ProductLookupPort> productLookupPort,
+            Optional<app.goodbuy.core.products.port.ExternalCatalogClient> externalCatalogClient,
             AsyncProductIngestionService asyncProductIngestionService,
-            Optional<ProductIngredientOcrPort> ingredientOcrPort
+            Optional<ProductIngredientOcrPort> ingredientOcrPort,
+            Optional<ProductSnapshotPort> productSnapshotPort,
+            Optional<ProductEvidenceAnalyzerPort> analyzerPort
     ) {
         this.evidenceReportService = evidenceReportService;
         this.evidenceReportRepository = evidenceReportRepository;
         this.productLookupPort = productLookupPort.orElse(null);
+        this.externalCatalogClient = externalCatalogClient.orElse(null);
         this.asyncProductIngestionService = asyncProductIngestionService;
         this.ingredientOcrPort = ingredientOcrPort.orElse(null);
+        this.productSnapshotPort = productSnapshotPort.orElse(null);
+        this.analyzerPort = analyzerPort.orElse(null);
     }
 
     @Transactional
@@ -95,13 +110,30 @@ public class ProductIngredientEvidenceIngestionService {
                     firstNonBlank(brandName, entity.getBrand()),
                     outcome.ingredients()
             );
-            entity.setStatus(ProductEvidenceReportService.STATUS_IN_PROGRESS);
-            entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_ANALYZING);
             entity.setLastReprocessedAt(OffsetDateTime.now());
-            asyncProductIngestionService.enqueue(reprocessDto);
-            queued = true;
-            log.info("ProductIngredientEvidenceIngestionService: queued reprocess ean={} ingredientCount={}",
-                    entity.getEan(), outcome.ingredients().size());
+
+            if (productSnapshotPort != null) {
+                try {
+                    productSnapshotPort.saveSnapshot(reprocessDto);
+                    entity.setStatus("READY_TO_RESCAN");
+                    entity.setAnalysisStatus("READY_TO_RESCAN");
+                    queued = true;
+                    log.info("ProductIngredientEvidenceIngestionService: saved recovery snapshot immediately ean={} ingredientCount={}",
+                            entity.getEan(), outcome.ingredients().size());
+                } catch (StrictProductIngestionException ex) {
+                    entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
+                    entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
+                    log.warn("ProductIngredientEvidenceIngestionService: sync recovery snapshot incomplete ean={} msg={}",
+                            entity.getEan(), ex.getMessage());
+                }
+            } else {
+                entity.setStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
+                entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
+                asyncProductIngestionService.enqueue(reprocessDto);
+                queued = true;
+                log.info("ProductIngredientEvidenceIngestionService: queued reprocess ean={} ingredientCount={}",
+                        entity.getEan(), outcome.ingredients().size());
+            }
         } else {
             entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
             entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
@@ -114,7 +146,9 @@ public class ProductIngredientEvidenceIngestionService {
                 reportResult.isNew(),
                 entity.getOcrStatus(),
                 outcome.ingredients().size(),
-                queued
+                queued,
+                entity.getStatus(),
+                entity.getAnalysisStatus()
         );
     }
 
@@ -157,21 +191,36 @@ public class ProductIngredientEvidenceIngestionService {
             status = "NOT_AVAILABLE";
         }
 
-        List<String> ingredients = IngredientTextParser.parse(rawText);
+        List<String> ocrIngredients = RecoveredIngredientExtractor.extract(rawText);
+        Integer expectedIngredientCount = RecoveredIngredientExtractor.expectedIngredientCount(rawText);
+        List<String> ingredients = mergeAiRecoveredIngredients(
+                entity.getEan(),
+                firstNonBlank(entity.getProductName()),
+                firstNonBlank(entity.getBrand()),
+                rawText,
+                manualSubmission ? rawText : null,
+                ocrIngredients,
+                frontImageBytes != null && frontImageBytes.length > 0,
+                backImageBytes != null && backImageBytes.length > 0
+        );
         String parsedText = ingredients.isEmpty() ? null : String.join(", ", ingredients);
-        boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission);
+        boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission, expectedIngredientCount);
 
         if (rawText != null && ingredients.isEmpty()) {
             status = "PARSE_EMPTY";
         } else if (rawText != null && !allowAutoReprocess) {
-            status = "LOW_CONFIDENCE";
+            status = lowCoverage(expectedIngredientCount, ingredients) ? "LOW_COVERAGE" : "LOW_CONFIDENCE";
         }
 
         return new OcrOutcome(status, provider, rawText, parsedText, ingredients, allowAutoReprocess);
     }
 
-    private static boolean shouldAutoReprocess(String rawText, List<String> ingredients, boolean manualSubmission) {
+    private static boolean shouldAutoReprocess(String rawText, List<String> ingredients, boolean manualSubmission, Integer expectedIngredientCount) {
         if (rawText == null || rawText.isBlank() || ingredients == null || ingredients.isEmpty()) {
+            return false;
+        }
+
+        if (lowCoverage(expectedIngredientCount, ingredients)) {
             return false;
         }
 
@@ -192,6 +241,45 @@ public class ProductIngredientEvidenceIngestionService {
         return enoughParsedIngredients || markerBackedShortList;
     }
 
+    private static boolean lowCoverage(Integer expectedIngredientCount, List<String> ingredients) {
+        if (expectedIngredientCount == null || expectedIngredientCount < 4 || ingredients == null) {
+            return false;
+        }
+        int parsedCount = ingredients.size();
+        int minimumExpected = Math.max(4, (int) Math.ceil(expectedIngredientCount * 0.6d));
+        return parsedCount < minimumExpected;
+    }
+
+    private List<String> mergeAiRecoveredIngredients(
+            String ean,
+            String productName,
+            String brandName,
+            String rawText,
+            String manualIngredientText,
+            List<String> ocrIngredients,
+            boolean frontImageProvided,
+            boolean backImageProvided
+    ) {
+        List<String> aiIngredients = List.of();
+        if (analyzerPort != null) {
+            aiIngredients = analyzerPort.analyze(new ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisRequest(
+                    ean,
+                    ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS,
+                    productName,
+                    brandName,
+                    rawText,
+                    manualIngredientText,
+                    frontImageProvided,
+                    backImageProvided
+            )).map(ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisResult::likelyIngredients).orElse(List.of());
+        }
+
+        Set<String> merged = new LinkedHashSet<>();
+        merged.addAll(aiIngredients == null ? List.of() : aiIngredients);
+        merged.addAll(ocrIngredients == null ? List.of() : ocrIngredients);
+        return RecoveredIngredientExtractor.normalizeCandidates(new ArrayList<>(merged));
+    }
+
     private ProductDetailDto buildReprocessDto(
             String ean,
             String fallbackName,
@@ -201,6 +289,9 @@ public class ProductIngredientEvidenceIngestionService {
         ProductDetailDto base = productLookupPort == null
                 ? null
                 : productLookupPort.findByGtin(ean).orElse(null);
+        if (base == null && externalCatalogClient != null) {
+            base = externalCatalogClient.findByGtin(ean).orElse(null);
+        }
 
         List<ProductDetailDto.IngredientDto> ingredients = ingredientLabels.stream()
                 .map(label -> new ProductDetailDto.IngredientDto(
@@ -223,7 +314,7 @@ public class ProductIngredientEvidenceIngestionService {
                 ingredients,
                 base == null ? Map.of() : safeMap(base.titles()),
                 base == null ? Map.of() : safeMap(base.manufacturer()),
-                "PRODUCT-EVIDENCE",
+                "AI-PRODUCT-INTAKE",
                 firstNonBlank(base == null ? null : base.domain(), "unknown"),
                 null,
                 null
@@ -272,6 +363,8 @@ public class ProductIngredientEvidenceIngestionService {
             boolean isNewReport,
             String ocrStatus,
             int parsedIngredientCount,
-            boolean reprocessQueued
+            boolean reprocessQueued,
+            String status,
+            String analysisStatus
     ) {}
 }

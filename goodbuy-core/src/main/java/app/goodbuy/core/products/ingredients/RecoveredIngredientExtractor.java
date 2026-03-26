@@ -1,0 +1,286 @@
+package app.goodbuy.core.products.ingredients;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public final class RecoveredIngredientExtractor {
+    private static final Pattern DECLARED_INGREDIENT_COUNT = Pattern.compile("\\bonly\\s+(\\d{1,3})\\s+ingredients\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern NUMBERED_INGREDIENT_MARKER = Pattern.compile("\\b(\\d{1,3})[.)]\\s*[a-z]", Pattern.CASE_INSENSITIVE);
+
+    private static final List<String> INGREDIENT_SECTION_MARKERS = List.of(
+            "ingredients:",
+            "ingredient:",
+            "other ingredients:",
+            "inactive ingredients:",
+            "active ingredients:"
+    );
+
+    private static final List<String> SECTION_STOP_MARKERS = List.of(
+            "directions",
+            "warning",
+            "warnings",
+            "drug facts",
+            "questions",
+            "distributed by",
+            "distribuido por",
+            "made in",
+            "uses",
+            "uses:",
+            "purpose",
+            "purpose:",
+            "keep out of reach",
+            "safety tip",
+            "tear free",
+            "no more tears",
+            "no parabens",
+            "no phthalates",
+            "phthalates or dyes",
+            "sulfates or dyes",
+            "gentle enough",
+            "hypoallergenic",
+            "compare to",
+            "safety seal",
+            "how to use",
+            "instructions"
+    );
+
+    private RecoveredIngredientExtractor() {}
+
+    public static List<String> extract(String rawText) {
+        String panel = ingredientPanelText(rawText);
+        if (panel == null) {
+            return List.of();
+        }
+        return normalizeCandidates(IngredientTextParser.parse(panel));
+    }
+
+    public static List<String> normalizeCandidates(List<String> values) {
+        return filterEvidenceIngredients(values);
+    }
+
+    public static Integer expectedIngredientCount(String rawText) {
+        String text = trimToNull(rawText);
+        if (text == null) {
+            return null;
+        }
+
+        Matcher declared = DECLARED_INGREDIENT_COUNT.matcher(text);
+        if (declared.find()) {
+            return parsePositiveInt(declared.group(1));
+        }
+
+        Matcher numbered = NUMBERED_INGREDIENT_MARKER.matcher(text);
+        int max = 0;
+        while (numbered.find()) {
+            Integer candidate = parsePositiveInt(numbered.group(1));
+            if (candidate != null && candidate > max) {
+                max = candidate;
+            }
+        }
+        return max >= 3 ? max : null;
+    }
+
+    private static List<String> filterEvidenceIngredients(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+
+        List<String> filtered = new ArrayList<>();
+        for (String value : values) {
+            String trimmed = trimToNull(value);
+            if (trimmed == null || !looksLikeIngredientCandidate(trimmed)) {
+                continue;
+            }
+            String normalized = normalizeCandidate(trimmed);
+            if (normalized != null && looksLikeIngredientCandidate(normalized)) {
+                filtered.add(normalized);
+            }
+        }
+        return filtered.stream().distinct().limit(64).toList();
+    }
+
+    private static String ingredientPanelText(String rawText) {
+        String text = trimToNull(rawText);
+        if (text == null) {
+            return null;
+        }
+
+        String lower = text.toLowerCase(Locale.ROOT);
+        int start = -1;
+        for (String marker : INGREDIENT_SECTION_MARKERS) {
+            int idx = lower.indexOf(marker);
+            if (idx >= 0 && (start == -1 || idx < start)) {
+                start = idx + marker.length();
+            }
+        }
+
+        if (start < 0) {
+            int numberedStart = numberedIngredientListStart(lower);
+            if (numberedStart < 0) {
+                return null;
+            }
+            start = numberedStart;
+        }
+
+        String panel = text.substring(Math.min(start, text.length())).trim();
+        String panelLower = panel.toLowerCase(Locale.ROOT);
+        int end = panel.length();
+        for (String stopMarker : SECTION_STOP_MARKERS) {
+            int idx = panelLower.indexOf(stopMarker);
+            if (idx > 0 && idx < end) {
+                end = idx;
+            }
+        }
+
+        return trimToNull(panel.substring(0, end));
+    }
+
+    private static int numberedIngredientListStart(String lower) {
+        int onlyIngredients = indexOfRegex(lower, "\\bonly\\s+\\d+\\s+ingredients\\b");
+        if (onlyIngredients >= 0) {
+            int nextNumbered = indexOfRegex(lower.substring(onlyIngredients), "\\b1[.)]\\s*[a-z]");
+            if (nextNumbered >= 0) {
+                return onlyIngredients + nextNumbered;
+            }
+        }
+
+        int numbered = indexOfRegex(lower, "\\b1[.)]\\s*[a-z]");
+        if (numbered >= 0) {
+            int second = indexOfRegex(lower.substring(numbered + 2), "\\b2[.)]\\s*[a-z]");
+            int third = indexOfRegex(lower.substring(numbered + 2), "\\b3[.)]\\s*[a-z]");
+            if (second >= 0 || third >= 0) {
+                return numbered;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int indexOfRegex(String text, String regex) {
+        var matcher = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        return matcher.find() ? matcher.start() : -1;
+    }
+
+    private static boolean looksLikeIngredientCandidate(String value) {
+        String lower = value.toLowerCase(Locale.ROOT).trim();
+        if (lower.isBlank()) {
+            return false;
+        }
+        if (lower.matches("^\\([^)]*\\)$")) {
+            return false;
+        }
+        if (lower.length() > 80) {
+            return false;
+        }
+        if (!lower.matches(".*[a-z].*")) {
+            return false;
+        }
+        if (lower.matches(".*\\b\\d{5,}\\b.*")) {
+            return false;
+        }
+        if (lower.matches(".*\\b\\d+(\\.\\d+)?\\s*(ml|fl\\s?oz|floz|oz|g|mg|mcg|kg|lb|lbs)\\b.*")) {
+            return false;
+        }
+        if (containsAny(lower,
+                "made in",
+                "distributed by",
+                "compare to",
+                "safety tip",
+                "only 11 ingredients",
+                "only ingredients",
+                "tear free",
+                "no more tears",
+                "hypoallergenic",
+                "gentle enough",
+                "wash & shampoo",
+                "bath and shampoo",
+                "baño y champú",
+                "no parabens",
+                "no phthalates",
+                "sulfates or dyes",
+                "j&jci",
+                "questions or comments",
+                "squirt a",
+                "clean away",
+                "increase the amount",
+                "greasier items",
+                "onto a sponge",
+                "how to use",
+                "use a little",
+                "apply to"
+        )) {
+            return false;
+        }
+        if (lower.startsWith("(") && containsAny(lower, "plant-derived", "surfactant", "naturally derived", "fragrance", "preservative")) {
+            return false;
+        }
+        if (lower.matches(".*\\b(squirt|clean|increase|apply|use|rub|rinse|wipe)\\b.*")) {
+            return false;
+        }
+        if (lower.startsWith("no ") || lower.startsWith("free of ") || lower.startsWith("free from ")) {
+            return false;
+        }
+        if (lower.contains("®") || lower.contains("™")) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean containsAny(String lower, String... needles) {
+        for (String needle : needles) {
+            if (lower.contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String normalizeCandidate(String value) {
+        String trimmed = trimToNull(value);
+        if (trimmed == null) {
+            return null;
+        }
+
+        var matcher = java.util.regex.Pattern.compile("^(.*?)\\s*\\(([^)]*)\\)\\s*$").matcher(trimmed);
+        if (matcher.matches()) {
+            String base = trimToNull(matcher.group(1));
+            String qualifier = trimToNull(matcher.group(2));
+            if (base != null && qualifier != null) {
+                String qualifierLower = qualifier.toLowerCase(Locale.ROOT);
+                if (qualifierLower.contains(",")
+                        || containsAny(qualifierLower,
+                        "plant-derived",
+                        "naturally derived",
+                        "surfactant",
+                        "preservative",
+                        "fragrance",
+                        "base ingredient",
+                        "cleaning agent")) {
+                    return base;
+                }
+            }
+        }
+
+        return trimmed;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static Integer parsePositiveInt(String value) {
+        try {
+            int parsed = Integer.parseInt(value);
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+}
