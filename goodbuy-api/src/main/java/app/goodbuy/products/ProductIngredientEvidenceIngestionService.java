@@ -95,8 +95,8 @@ public class ProductIngredientEvidenceIngestionService {
                     firstNonBlank(brandName, entity.getBrand()),
                     outcome.ingredients()
             );
-            entity.setStatus(ProductEvidenceReportService.STATUS_IN_PROGRESS);
-            entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_ANALYZING);
+            entity.setStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
+            entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
             entity.setLastReprocessedAt(OffsetDateTime.now());
             asyncProductIngestionService.enqueue(reprocessDto);
             queued = true;
@@ -114,7 +114,9 @@ public class ProductIngredientEvidenceIngestionService {
                 reportResult.isNew(),
                 entity.getOcrStatus(),
                 outcome.ingredients().size(),
-                queued
+                queued,
+                entity.getStatus(),
+                entity.getAnalysisStatus()
         );
     }
 
@@ -223,7 +225,7 @@ public class ProductIngredientEvidenceIngestionService {
                 ingredients,
                 base == null ? Map.of() : safeMap(base.titles()),
                 base == null ? Map.of() : safeMap(base.manufacturer()),
-                "PRODUCT-EVIDENCE",
+                "AI-PRODUCT-INTAKE",
                 firstNonBlank(base == null ? null : base.domain(), "unknown"),
                 null,
                 null
@@ -272,6 +274,8 @@ public class ProductIngredientEvidenceIngestionService {
             boolean isNewReport,
             String ocrStatus,
             int parsedIngredientCount,
-            boolean reprocessQueued
+            boolean reprocessQueued,
+            String status,
+            String analysisStatus
     ) {}
 }

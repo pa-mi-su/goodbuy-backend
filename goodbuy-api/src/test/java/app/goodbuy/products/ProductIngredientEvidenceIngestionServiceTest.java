@@ -65,6 +65,8 @@ class ProductIngredientEvidenceIngestionServiceTest {
         assertEquals("COMPLETED", result.ocrStatus());
         assertEquals(4, result.parsedIngredientCount());
         assertTrue(result.reprocessQueued());
+        assertEquals("DRAFT_CREATED", result.status());
+        assertEquals("DRAFT_CREATED", result.analysisStatus());
         verify(asyncService).enqueue(any(ProductDetailDto.class));
         verify(evidenceReportRepository).save(entity);
     }
