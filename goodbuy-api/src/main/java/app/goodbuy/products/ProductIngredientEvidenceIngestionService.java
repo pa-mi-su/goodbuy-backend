@@ -7,6 +7,8 @@ import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.ingredients.IngredientTextParser;
 import app.goodbuy.core.products.port.ProductIngredientOcrPort;
 import app.goodbuy.core.products.port.ProductLookupPort;
+import app.goodbuy.core.products.port.ProductSnapshotPort;
+import app.goodbuy.core.products.StrictProductIngestionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,19 +30,22 @@ public class ProductIngredientEvidenceIngestionService {
     private final ProductLookupPort productLookupPort;
     private final AsyncProductIngestionService asyncProductIngestionService;
     private final ProductIngredientOcrPort ingredientOcrPort;
+    private final ProductSnapshotPort productSnapshotPort;
 
     public ProductIngredientEvidenceIngestionService(
             ProductEvidenceReportService evidenceReportService,
             ProductEvidenceReportRepository evidenceReportRepository,
             Optional<ProductLookupPort> productLookupPort,
             AsyncProductIngestionService asyncProductIngestionService,
-            Optional<ProductIngredientOcrPort> ingredientOcrPort
+            Optional<ProductIngredientOcrPort> ingredientOcrPort,
+            Optional<ProductSnapshotPort> productSnapshotPort
     ) {
         this.evidenceReportService = evidenceReportService;
         this.evidenceReportRepository = evidenceReportRepository;
         this.productLookupPort = productLookupPort.orElse(null);
         this.asyncProductIngestionService = asyncProductIngestionService;
         this.ingredientOcrPort = ingredientOcrPort.orElse(null);
+        this.productSnapshotPort = productSnapshotPort.orElse(null);
     }
 
     @Transactional
@@ -95,13 +100,30 @@ public class ProductIngredientEvidenceIngestionService {
                     firstNonBlank(brandName, entity.getBrand()),
                     outcome.ingredients()
             );
-            entity.setStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
-            entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
             entity.setLastReprocessedAt(OffsetDateTime.now());
-            asyncProductIngestionService.enqueue(reprocessDto);
-            queued = true;
-            log.info("ProductIngredientEvidenceIngestionService: queued reprocess ean={} ingredientCount={}",
-                    entity.getEan(), outcome.ingredients().size());
+
+            if (productSnapshotPort != null) {
+                try {
+                    productSnapshotPort.saveSnapshot(reprocessDto);
+                    entity.setStatus("READY_TO_RESCAN");
+                    entity.setAnalysisStatus("READY_TO_RESCAN");
+                    queued = true;
+                    log.info("ProductIngredientEvidenceIngestionService: saved recovery snapshot immediately ean={} ingredientCount={}",
+                            entity.getEan(), outcome.ingredients().size());
+                } catch (StrictProductIngestionException ex) {
+                    entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
+                    entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
+                    log.warn("ProductIngredientEvidenceIngestionService: sync recovery snapshot incomplete ean={} msg={}",
+                            entity.getEan(), ex.getMessage());
+                }
+            } else {
+                entity.setStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
+                entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_DRAFT_CREATED);
+                asyncProductIngestionService.enqueue(reprocessDto);
+                queued = true;
+                log.info("ProductIngredientEvidenceIngestionService: queued reprocess ean={} ingredientCount={}",
+                        entity.getEan(), outcome.ingredients().size());
+            }
         } else {
             entity.setStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);
             entity.setAnalysisStatus(ProductEvidenceReportService.STATUS_REVIEW_REQUIRED);

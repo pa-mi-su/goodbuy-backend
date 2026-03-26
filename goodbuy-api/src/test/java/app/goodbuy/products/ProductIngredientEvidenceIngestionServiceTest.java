@@ -5,6 +5,7 @@ import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.port.ProductLookupPort;
+import app.goodbuy.core.products.port.ProductSnapshotPort;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -28,6 +29,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
         ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
         ProductLookupPort lookupPort = mock(ProductLookupPort.class);
         AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
 
         ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
         entity.setEan("00012345678901");
@@ -47,7 +49,8 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 evidenceReportRepository,
                 Optional.of(lookupPort),
                 asyncService,
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(snapshotPort)
         );
 
         var result = service.ingest(
@@ -67,9 +70,9 @@ class ProductIngredientEvidenceIngestionServiceTest {
         assertEquals("COMPLETED", result.ocrStatus());
         assertEquals(4, result.parsedIngredientCount());
         assertTrue(result.reprocessQueued());
-        assertEquals("DRAFT_CREATED", result.status());
-        assertEquals("DRAFT_CREATED", result.analysisStatus());
-        verify(asyncService).enqueue(argThat(dto ->
+        assertEquals("READY_TO_RESCAN", result.status());
+        assertEquals("READY_TO_RESCAN", result.analysisStatus());
+        verify(snapshotPort).saveSnapshot(argThat(dto ->
                 dto != null
                         && "00012345678901".equals(dto.gtin())
                         && "AI-PRODUCT-INTAKE".equals(dto.source())
@@ -87,6 +90,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
         ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
         ProductLookupPort lookupPort = mock(ProductLookupPort.class);
         AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
 
         ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
         entity.setEan("00012345678901");
@@ -106,7 +110,8 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 evidenceReportRepository,
                 Optional.of(lookupPort),
                 asyncService,
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(snapshotPort)
         );
 
         var result = service.ingest(
