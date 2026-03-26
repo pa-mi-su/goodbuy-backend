@@ -207,6 +207,69 @@ class ProductIngredientEvidenceIngestionServiceTest {
     }
 
     @Test
+    void ignoresStandaloneParentheticalQualifierFragments() {
+        ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
+        ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
+        ProductLookupPort lookupPort = mock(ProductLookupPort.class);
+        ExternalCatalogClient externalCatalogClient = mock(ExternalCatalogClient.class);
+        AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
+
+        ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
+        entity.setEan("00749174097279");
+        entity.setReason(ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS);
+        entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+        entity.setProductName("Dishmate Liquid, Lavender - 25 fl oz");
+        entity.setBrand("ECOS");
+
+        when(evidenceReportService.reportWithStatus(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn(new ProductEvidenceReportService.ProductEvidenceReportResult(entity, true));
+        when(evidenceReportRepository.save(any(ProductEvidenceReportEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(lookupPort.findByGtin("00749174097279")).thenReturn(Optional.of(existingDto()));
+
+        ProductIngredientEvidenceIngestionService service = new ProductIngredientEvidenceIngestionService(
+                evidenceReportService,
+                evidenceReportRepository,
+                Optional.of(lookupPort),
+                Optional.of(externalCatalogClient),
+                asyncService,
+                Optional.empty(),
+                Optional.of(snapshotPort)
+        );
+
+        var result = service.ingest(
+                "00749174097279",
+                "Dishmate Liquid, Lavender - 25 fl oz",
+                "ECOS",
+                "1.0",
+                "ios",
+                "user submitted label",
+                """
+                ONLY 11 INGREDIENTS
+                1. Water
+                2. Sodium Coco-Sulfate (plant-derived,surfactant)
+                3. Cocamidopropylamine Oxide
+                (plant-derived surfactant)
+                4. Lauramine Oxide (plant-derived)
+                5. Phenoxyethanol
+                """,
+                null,
+                null,
+                null,
+                null
+        );
+
+        assertEquals("COMPLETED", result.ocrStatus());
+        assertEquals(5, result.parsedIngredientCount());
+        verify(snapshotPort).saveSnapshot(argThat(dto ->
+                dto != null
+                        && dto.ingredients() != null
+                        && dto.ingredients().stream().noneMatch(ing -> ing.original().toLowerCase().contains("(plant-derived surfactant)"))
+        ));
+    }
+
+    @Test
     void doesNotQueueReprocessWhenIngredientTextIsUnreadable() {
         ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
         ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);

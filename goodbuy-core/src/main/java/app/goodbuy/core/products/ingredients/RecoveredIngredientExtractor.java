@@ -136,6 +136,9 @@ public final class RecoveredIngredientExtractor {
         if (lower.isBlank()) {
             return false;
         }
+        if (lower.matches("^\\([^)]*\\)$")) {
+            return false;
+        }
         if (lower.length() > 80) {
             return false;
         }
@@ -176,6 +179,9 @@ public final class RecoveredIngredientExtractor {
                 "use a little",
                 "apply to"
         )) {
+            return false;
+        }
+        if (lower.startsWith("(") && containsAny(lower, "plant-derived", "surfactant", "naturally derived", "fragrance", "preservative")) {
             return false;
         }
         if (lower.matches(".*\\b(squirt|clean|increase|apply|use|rub|rinse|wipe)\\b.*")) {
