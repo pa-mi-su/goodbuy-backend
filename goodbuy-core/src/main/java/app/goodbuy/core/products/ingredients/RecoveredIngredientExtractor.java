@@ -85,7 +85,11 @@ public final class RecoveredIngredientExtractor {
         }
 
         if (start < 0) {
-            return null;
+            int numberedStart = numberedIngredientListStart(lower);
+            if (numberedStart < 0) {
+                return null;
+            }
+            start = numberedStart;
         }
 
         String panel = text.substring(Math.min(start, text.length())).trim();
@@ -99,6 +103,32 @@ public final class RecoveredIngredientExtractor {
         }
 
         return trimToNull(panel.substring(0, end));
+    }
+
+    private static int numberedIngredientListStart(String lower) {
+        int onlyIngredients = indexOfRegex(lower, "\\bonly\\s+\\d+\\s+ingredients\\b");
+        if (onlyIngredients >= 0) {
+            int nextNumbered = indexOfRegex(lower.substring(onlyIngredients), "\\b1[.)]\\s*[a-z]");
+            if (nextNumbered >= 0) {
+                return onlyIngredients + nextNumbered;
+            }
+        }
+
+        int numbered = indexOfRegex(lower, "\\b1[.)]\\s*[a-z]");
+        if (numbered >= 0) {
+            int second = indexOfRegex(lower.substring(numbered + 2), "\\b2[.)]\\s*[a-z]");
+            int third = indexOfRegex(lower.substring(numbered + 2), "\\b3[.)]\\s*[a-z]");
+            if (second >= 0 || third >= 0) {
+                return numbered;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int indexOfRegex(String text, String regex) {
+        var matcher = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        return matcher.find() ? matcher.start() : -1;
     }
 
     private static boolean looksLikeIngredientCandidate(String value) {
