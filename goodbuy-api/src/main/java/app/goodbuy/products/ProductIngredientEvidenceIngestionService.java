@@ -5,6 +5,7 @@ import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
 import app.goodbuy.core.products.ingredients.RecoveredIngredientExtractor;
+import app.goodbuy.core.products.port.ProductEvidenceAnalyzerPort;
 import app.goodbuy.core.products.port.ProductIngredientOcrPort;
 import app.goodbuy.core.products.port.ProductLookupPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
@@ -15,10 +16,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class ProductIngredientEvidenceIngestionService {
@@ -32,6 +36,7 @@ public class ProductIngredientEvidenceIngestionService {
     private final AsyncProductIngestionService asyncProductIngestionService;
     private final ProductIngredientOcrPort ingredientOcrPort;
     private final ProductSnapshotPort productSnapshotPort;
+    private final ProductEvidenceAnalyzerPort analyzerPort;
 
     public ProductIngredientEvidenceIngestionService(
             ProductEvidenceReportService evidenceReportService,
@@ -40,7 +45,8 @@ public class ProductIngredientEvidenceIngestionService {
             Optional<app.goodbuy.core.products.port.ExternalCatalogClient> externalCatalogClient,
             AsyncProductIngestionService asyncProductIngestionService,
             Optional<ProductIngredientOcrPort> ingredientOcrPort,
-            Optional<ProductSnapshotPort> productSnapshotPort
+            Optional<ProductSnapshotPort> productSnapshotPort,
+            Optional<ProductEvidenceAnalyzerPort> analyzerPort
     ) {
         this.evidenceReportService = evidenceReportService;
         this.evidenceReportRepository = evidenceReportRepository;
@@ -49,6 +55,7 @@ public class ProductIngredientEvidenceIngestionService {
         this.asyncProductIngestionService = asyncProductIngestionService;
         this.ingredientOcrPort = ingredientOcrPort.orElse(null);
         this.productSnapshotPort = productSnapshotPort.orElse(null);
+        this.analyzerPort = analyzerPort.orElse(null);
     }
 
     @Transactional
@@ -184,7 +191,17 @@ public class ProductIngredientEvidenceIngestionService {
             status = "NOT_AVAILABLE";
         }
 
-        List<String> ingredients = RecoveredIngredientExtractor.extract(rawText);
+        List<String> ocrIngredients = RecoveredIngredientExtractor.extract(rawText);
+        List<String> ingredients = mergeAiRecoveredIngredients(
+                entity.getEan(),
+                firstNonBlank(entity.getProductName()),
+                firstNonBlank(entity.getBrand()),
+                rawText,
+                manualSubmission ? rawText : null,
+                ocrIngredients,
+                frontImageBytes != null && frontImageBytes.length > 0,
+                backImageBytes != null && backImageBytes.length > 0
+        );
         String parsedText = ingredients.isEmpty() ? null : String.join(", ", ingredients);
         boolean allowAutoReprocess = shouldAutoReprocess(rawText, ingredients, manualSubmission);
 
@@ -217,6 +234,36 @@ public class ProductIngredientEvidenceIngestionService {
         boolean markerBackedShortList = hasIngredientMarker && ingredients.size() >= 3;
 
         return enoughParsedIngredients || markerBackedShortList;
+    }
+
+    private List<String> mergeAiRecoveredIngredients(
+            String ean,
+            String productName,
+            String brandName,
+            String rawText,
+            String manualIngredientText,
+            List<String> ocrIngredients,
+            boolean frontImageProvided,
+            boolean backImageProvided
+    ) {
+        List<String> aiIngredients = List.of();
+        if (analyzerPort != null) {
+            aiIngredients = analyzerPort.analyze(new ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisRequest(
+                    ean,
+                    ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS,
+                    productName,
+                    brandName,
+                    rawText,
+                    manualIngredientText,
+                    frontImageProvided,
+                    backImageProvided
+            )).map(ProductEvidenceAnalyzerPort.ProductEvidenceAnalysisResult::likelyIngredients).orElse(List.of());
+        }
+
+        Set<String> merged = new LinkedHashSet<>();
+        merged.addAll(aiIngredients == null ? List.of() : aiIngredients);
+        merged.addAll(ocrIngredients == null ? List.of() : ocrIngredients);
+        return RecoveredIngredientExtractor.normalizeCandidates(new ArrayList<>(merged));
     }
 
     private ProductDetailDto buildReprocessDto(

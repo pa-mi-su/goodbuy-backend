@@ -50,7 +50,11 @@ public final class RecoveredIngredientExtractor {
         if (panel == null) {
             return List.of();
         }
-        return filterEvidenceIngredients(IngredientTextParser.parse(panel));
+        return normalizeCandidates(IngredientTextParser.parse(panel));
+    }
+
+    public static List<String> normalizeCandidates(List<String> values) {
+        return filterEvidenceIngredients(values);
     }
 
     private static List<String> filterEvidenceIngredients(List<String> values) {
