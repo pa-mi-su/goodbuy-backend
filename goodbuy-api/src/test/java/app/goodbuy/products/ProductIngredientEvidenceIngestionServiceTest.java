@@ -4,6 +4,7 @@ import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
 import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
 import app.goodbuy.adapters.core.products.service.ProductEvidenceReportService;
 import app.goodbuy.core.products.dto.ProductDetailDto;
+import app.goodbuy.core.products.port.ExternalCatalogClient;
 import app.goodbuy.core.products.port.ProductLookupPort;
 import app.goodbuy.core.products.port.ProductSnapshotPort;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
         ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
         ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
         ProductLookupPort lookupPort = mock(ProductLookupPort.class);
+        ExternalCatalogClient externalCatalogClient = mock(ExternalCatalogClient.class);
         AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
         ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
 
@@ -48,6 +50,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 evidenceReportService,
                 evidenceReportRepository,
                 Optional.of(lookupPort),
+                Optional.of(externalCatalogClient),
                 asyncService,
                 Optional.empty(),
                 Optional.of(snapshotPort)
@@ -89,6 +92,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
         ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
         ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
         ProductLookupPort lookupPort = mock(ProductLookupPort.class);
+        ExternalCatalogClient externalCatalogClient = mock(ExternalCatalogClient.class);
         AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
         ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
 
@@ -109,6 +113,7 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 evidenceReportService,
                 evidenceReportRepository,
                 Optional.of(lookupPort),
+                Optional.of(externalCatalogClient),
                 asyncService,
                 Optional.empty(),
                 Optional.of(snapshotPort)
@@ -136,6 +141,62 @@ class ProductIngredientEvidenceIngestionServiceTest {
         verify(evidenceReportRepository).save(entity);
     }
 
+    @Test
+    void carriesForwardExternalCatalogImagesWhenDbProductDoesNotExistYet() {
+        ProductEvidenceReportService evidenceReportService = mock(ProductEvidenceReportService.class);
+        ProductEvidenceReportRepository evidenceReportRepository = mock(ProductEvidenceReportRepository.class);
+        ProductLookupPort lookupPort = mock(ProductLookupPort.class);
+        ExternalCatalogClient externalCatalogClient = mock(ExternalCatalogClient.class);
+        AsyncProductIngestionService asyncService = mock(AsyncProductIngestionService.class);
+        ProductSnapshotPort snapshotPort = mock(ProductSnapshotPort.class);
+
+        ProductEvidenceReportEntity entity = new ProductEvidenceReportEntity();
+        entity.setEan("00749174097279");
+        entity.setReason(ProductEvidenceReportService.REASON_UNCLEAR_INGREDIENTS);
+        entity.setStatus(ProductEvidenceReportService.STATUS_REPORTED);
+        entity.setProductName("Dishmate Liquid, Lavender - 25 fl oz");
+        entity.setBrand("ECOS");
+
+        when(evidenceReportService.reportWithStatus(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
+        )).thenReturn(new ProductEvidenceReportService.ProductEvidenceReportResult(entity, true));
+        when(evidenceReportRepository.save(any(ProductEvidenceReportEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(lookupPort.findByGtin("00749174097279")).thenReturn(Optional.empty());
+        when(externalCatalogClient.findByGtin("00749174097279")).thenReturn(Optional.of(externalDto()));
+
+        ProductIngredientEvidenceIngestionService service = new ProductIngredientEvidenceIngestionService(
+                evidenceReportService,
+                evidenceReportRepository,
+                Optional.of(lookupPort),
+                Optional.of(externalCatalogClient),
+                asyncService,
+                Optional.empty(),
+                Optional.of(snapshotPort)
+        );
+
+        service.ingest(
+                "00749174097279",
+                "Dishmate Liquid, Lavender - 25 fl oz",
+                "ECOS",
+                "1.0",
+                "ios",
+                "user submitted label",
+                "Ingredients: Water, Sodium Coco-Sulfate, Cocamidopropylamine Oxide",
+                null,
+                null,
+                null,
+                null
+        );
+
+        verify(snapshotPort).saveSnapshot(argThat(dto ->
+                dto != null
+                        && "00749174097279".equals(dto.gtin())
+                        && dto.images() != null
+                        && dto.images().size() == 1
+                        && "https://cdn.example.com/dishmate-front.jpg".equals(dto.images().get(0).url())
+        ));
+    }
+
     private static ProductDetailDto existingDto() {
         return new ProductDetailDto(
                 "00012345678901",
@@ -149,6 +210,24 @@ class ProductIngredientEvidenceIngestionServiceTest {
                 Map.of(),
                 "GOODBUY-DB",
                 "personal-care",
+                null,
+                null
+        );
+    }
+
+    private static ProductDetailDto externalDto() {
+        return new ProductDetailDto(
+                "00749174097279",
+                "Dishmate Liquid, Lavender - 25 fl oz",
+                "ECOS",
+                "dish detergent",
+                "desc",
+                List.of(new ProductDetailDto.ImageDto("https://cdn.example.com/dishmate-front.jpg", 400, 800)),
+                List.of(),
+                Map.of(),
+                Map.of(),
+                "EAN-DB",
+                "cleaning",
                 null,
                 null
         );

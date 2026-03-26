@@ -28,6 +28,7 @@ public class ProductIngredientEvidenceIngestionService {
     private final ProductEvidenceReportService evidenceReportService;
     private final ProductEvidenceReportRepository evidenceReportRepository;
     private final ProductLookupPort productLookupPort;
+    private final app.goodbuy.core.products.port.ExternalCatalogClient externalCatalogClient;
     private final AsyncProductIngestionService asyncProductIngestionService;
     private final ProductIngredientOcrPort ingredientOcrPort;
     private final ProductSnapshotPort productSnapshotPort;
@@ -36,6 +37,7 @@ public class ProductIngredientEvidenceIngestionService {
             ProductEvidenceReportService evidenceReportService,
             ProductEvidenceReportRepository evidenceReportRepository,
             Optional<ProductLookupPort> productLookupPort,
+            Optional<app.goodbuy.core.products.port.ExternalCatalogClient> externalCatalogClient,
             AsyncProductIngestionService asyncProductIngestionService,
             Optional<ProductIngredientOcrPort> ingredientOcrPort,
             Optional<ProductSnapshotPort> productSnapshotPort
@@ -43,6 +45,7 @@ public class ProductIngredientEvidenceIngestionService {
         this.evidenceReportService = evidenceReportService;
         this.evidenceReportRepository = evidenceReportRepository;
         this.productLookupPort = productLookupPort.orElse(null);
+        this.externalCatalogClient = externalCatalogClient.orElse(null);
         this.asyncProductIngestionService = asyncProductIngestionService;
         this.ingredientOcrPort = ingredientOcrPort.orElse(null);
         this.productSnapshotPort = productSnapshotPort.orElse(null);
@@ -225,6 +228,9 @@ public class ProductIngredientEvidenceIngestionService {
         ProductDetailDto base = productLookupPort == null
                 ? null
                 : productLookupPort.findByGtin(ean).orElse(null);
+        if (base == null && externalCatalogClient != null) {
+            base = externalCatalogClient.findByGtin(ean).orElse(null);
+        }
 
         List<ProductDetailDto.IngredientDto> ingredients = ingredientLabels.stream()
                 .map(label -> new ProductDetailDto.IngredientDto(
