@@ -6,26 +6,24 @@
 [![Flyway](https://img.shields.io/badge/Flyway-Migrations-orange)](https://flywaydb.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docs.docker.com/compose/)
 
-GoodBuy Backend is a modular Spring Boot service that powers the GoodBuy iOS app. It handles barcode-based product lookup, ingredient normalization, ingredient and product scoring, magic-link auth, user history and favorites, and an AI-assisted recovery flow for products that come back not found, weak, or incomplete.
+GoodBuy Backend is a modular Spring Boot service that powers the GoodBuy iOS app. It handles barcode-based product lookup, ingredient normalization, ingredient and product scoring, magic-link auth, user history and favorites, and manual product reporting when a scan is missing, weak, or incomplete.
 
 ## What It Does
 
 - Serves fast product scan responses through a DB-first lookup path with async ingestion on cache miss
-- Integrates with external catalog providers such as EAN-DB and EAN-Search to bootstrap product metadata
+- Integrates with external catalog providers such as Open Facts, UPCitemdb, EAN-Search, and EAN-DB to bootstrap product metadata
 - Persists normalized products, ingredients, aliases, evidence signals, and user-facing snapshots in PostgreSQL
 - Creates immediate first-pass ingredient reads so scans can return populated ingredient lists and provisional scores before deeper enrichment finishes
 - Scores ingredients and products using a rule-based safety engine instead of optimistic default grading
-- Accepts front and label photos for unsupported, missing, or weak scans and routes them through OCR plus AI-assisted product analysis
-- Builds high-confidence draft products automatically, stores their evidence photos in S3, and promotes the uploaded front photo into the recovered product snapshot
-- Routes low-confidence or unreadable photo submissions into review/retry states instead of silently failing
+- Accepts simple product reports for unsupported, missing, or weak scans and sends them to the team for manual review
 
 ## Highlights
 
 - **Async scan ingestion:** first-time scans return quickly while snapshot persistence, matching, and scoring continue in the background
 - **Immediate ingredient reads:** fresh scans can create provisional ingredient records and first-pass product scoring on the initial response
-- **AI recovery intake:** photo submissions can trigger OCR, AI product classification, ingredient extraction, confidence scoring, and draft-product creation
+- **Manual report intake:** weak or missing scans can be reported straight to the team with the UPC and any known product context
 - **Broader domain support:** food, vitamins, medicine, cleaners, soaps, personal care, baby, household, and related contact/ingestible domains are open for intake and classification
-- **Evidence lifecycle:** recovery rows track OCR status, parsed ingredient count, analysis status, confidence, next action, and whether a product is ready to rescan
+- **Evidence queue:** reported products are stored, deduped by UPC + reason, and forwarded to Slack for manual review
 - **Deterministic scoring:** product grades are driven by ingredient evidence and curated rules, not a “safe until proven unsafe” default
 
 ## Architecture
@@ -35,16 +33,14 @@ iOS App
   -> GET /v1/products/{gtin}
   -> POST /api/v1/history/scan
   -> GET /api/ingredients/{key}
-  -> POST /api/v1/products/evidence/analyze
-  -> GET /api/v1/products/evidence/status
-  -> POST /api/v1/products/evidence/ingredients
+  -> POST /api/v1/products/evidence
 
 goodbuy-api (Spring Boot)
   -> ProductController / ProductService
   -> IngredientController / IngredientReadService
   -> HistoryController / FavoriteController
   -> MagicLinkAuthController / UserRegistrationController
-  -> ProductEvidenceReportController / ProductEvidenceAnalysisService
+  -> ProductEvidenceReportController
   -> SessionTokenAuthFilter / admin APIs / upload APIs
   -> AsyncProductIngestionService + AsyncIngredientResearchWorker
 
@@ -52,9 +48,9 @@ goodbuy-core (domain + ports)
   -> DTOs, scoring engines, ports, parsers
 
 Adapters
-  -> goodbuy-adapters-catalog: EAN-DB / EAN-Search
+  -> goodbuy-adapters-catalog: Open Facts / UPCitemdb / EAN-Search / EAN-DB
   -> goodbuy-adapters-core: JPA, Flyway, storage, notifications, OCR, lookup, snapshot persistence
-  -> goodbuy-adapters-enrichment: OpenAI + PubChem enrichment integrations
+  -> goodbuy-adapters-enrichment: PubChem enrichment integrations
 
 PostgreSQL
   -> products, ingredients, aliases, product_ingredients
@@ -64,7 +60,7 @@ PostgreSQL
 
 Amazon S3
   -> mirrored product imagery
-  -> user-submitted front / label evidence photos
+  -> optional evidence attachments for manual review
 ```
 
 ## End-To-End Scan Flow
@@ -86,28 +82,10 @@ Amazon S3
 
 ### Missing, weak, or unsupported product
 
-1. The app uploads a front photo plus a label/ingredients photo to `POST /api/v1/products/evidence/analyze`
-2. The backend stores the evidence row and uploads the photos to S3
-3. OCR attempts to extract usable label text
-4. AI analysis infers domain, category, product identity, and likely ingredients
-5. Ingredient candidates are filtered, normalized, and mapped toward canonical ingredient records
-6. The backend scores confidence and chooses one of two paths:
-   - `DRAFT_CREATED`: create a draft product and queue it through the normal snapshot path
-   - `REVIEW_REQUIRED`: preserve the evidence and return a retry/review recommendation
-7. `GET /api/v1/products/evidence/status` returns the current state, parsed ingredient count, next action, and whether rescanning is worth trying yet
-
-## Recovery Status Model
-
-The AI photo-analysis flow uses a lightweight status model so the app can tell the user what is happening without pretending the product is already fully decoded.
-
-- `DRAFT_CREATED`: a draft product build has started from the submitted evidence
-- `REVIEW_REQUIRED`: OCR/AI confidence was too weak to auto-create a good draft
-- `READY_TO_RESCAN`: the product is available through the normal product endpoint
-- `RESCAN_SOON`: the draft exists but is not yet ready to open as a normal scan result
-- `WAIT_FOR_REVIEW`: the backend needs better evidence or a manual pass
-- `WAIT_FOR_UPDATE`: fallback holding state when analysis exists but the final recommendation is still settling
-
-Unreadable or junk photos are expected to land in a retry path rather than poisoning the catalog.
+1. The app posts `POST /api/v1/products/evidence` with the UPC, reason, and any known product metadata
+2. The backend stores or updates a report row keyed by UPC + reason
+3. The backend sends a Slack notification so the team can manually research the product
+4. Once the product is fixed in the catalog, later scans resolve through the normal product path
 
 ## Project Structure
 
@@ -191,10 +169,7 @@ goodbuy-backend/
 
 ### Evidence And Recovery APIs
 
-- `POST /api/v1/products/evidence`: legacy evidence/report endpoint
-- `POST /api/v1/products/evidence/analyze`: AI-assisted front + label photo intake
-- `GET /api/v1/products/evidence/status`: evidence status lookup with next-action guidance
-- `POST /api/v1/products/evidence/ingredients`: submit corrected ingredient text or images for low-coverage products and trigger reprocessing
+- `POST /api/v1/products/evidence`: report a missing, weak, or unsupported product for manual review
 - `POST /api/v1/ingredients/missing`: report unmatched ingredient strings
 
 ### Admin APIs
@@ -227,7 +202,7 @@ Review and recovery tables:
 - `ingredient_missing_report`
 - `product_evidence_report`
 
-`product_evidence_report` now stores more than raw uploads. It includes OCR state, AI analysis state, confidence, parsed ingredient count, domain/category guesses, and links to the uploaded front/back photos in S3.
+`product_evidence_report` stores the UPC, reason, latest app metadata, notes, and any optional evidence attachments associated with a manual review request.
 
 Additional schema notes live in [docs/schema-notes.md](/Users/pms/Documents/Projects/goodbuy-backend/docs/schema-notes.md).
 
