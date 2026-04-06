@@ -11,7 +11,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
 
 @Service
 @Transactional
@@ -24,30 +26,14 @@ public class ProductEvidenceReportService {
     public static final String REASON_MISSING_PRODUCT = "missing_product";
     public static final String REASON_UNCLEAR_INGREDIENTS = "unclear_ingredients";
     public static final String REASON_OUT_OF_DOMAIN = "out_of_domain";
-    public static final String REASON_ANALYSIS_REQUESTED = "analysis_requested";
-
     private static final Set<String> ALLOWED_REASONS = Set.of(
             REASON_MISSING_PRODUCT,
             REASON_UNCLEAR_INGREDIENTS,
-            REASON_OUT_OF_DOMAIN,
-            REASON_ANALYSIS_REQUESTED
+            REASON_OUT_OF_DOMAIN
     );
 
-    // ✅ Statuses that mean “already reported / active”
     public static final String STATUS_REPORTED = "REPORTED";
-    public static final String STATUS_IN_PROGRESS = "IN_PROGRESS";
     public static final String STATUS_RESOLVED = "RESOLVED";
-    public static final String STATUS_ANALYZING = "ANALYZING";
-    public static final String STATUS_REVIEW_REQUIRED = "REVIEW_REQUIRED";
-    public static final String STATUS_DRAFT_CREATED = "DRAFT_CREATED";
-
-    private static final List<String> ACTIVE_STATUSES = List.of(
-            STATUS_REPORTED,
-            STATUS_IN_PROGRESS,
-            STATUS_ANALYZING,
-            STATUS_REVIEW_REQUIRED,
-            STATUS_DRAFT_CREATED
-    );
 
     private final ProductEvidenceReportRepository repo;
     private final SlackNotificationAdapter slack;
@@ -144,21 +130,6 @@ public class ProductEvidenceReportService {
         }
 
         return new ProductEvidenceReportResult(saved, isNew);
-    }
-
-    /**
-     * ✅ DB truth for ResultView / History / Favorites.
-     * Returns the active evidence record if present, else empty.
-     */
-    @Transactional(readOnly = true)
-    public Optional<ProductEvidenceReportEntity> findActiveStatus(String ean, String reason) {
-        String eanNorm = normalizeToGtin14DigitsOnly(ean);
-        if (eanNorm == null) return Optional.empty();
-
-        String reasonNorm = normalizeReason(reason);
-        if (reasonNorm.isBlank() || !ALLOWED_REASONS.contains(reasonNorm)) return Optional.empty();
-
-        return repo.findByEanAndReasonAndStatusIn(eanNorm, reasonNorm, ACTIVE_STATUSES);
     }
 
     // ───────────────── helpers ─────────────────
