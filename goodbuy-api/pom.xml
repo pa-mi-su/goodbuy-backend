@@ -102,7 +102,7 @@
       <version>1.16.1</version>
     </dependency>
 
-    <!-- AWS S3 client for uploading product & missing-product photos -->
+    <!-- AWS S3 client for mirrored product images -->
     <!-- IMPORTANT: version is managed by AWS SDK BOM imported in parent -->
     <dependency>
       <groupId>software.amazon.awssdk</groupId>

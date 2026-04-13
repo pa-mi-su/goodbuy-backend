@@ -22,8 +22,7 @@
   - one row per `(ingredient_name, product_ean)`
 - `product_evidence_report`
   - product-level review queue for missing product / unclear ingredients / out-of-domain
-  - accepts front/back photo evidence
-  - stores OCR/raw ingredient text and parsed ingredient text when evidence is used to repair low-coverage scans
+  - stores lightweight metadata and notes for manual review
   - one row per `(ean, reason)`
 
 ## User Snapshot Tables
@@ -38,6 +37,7 @@
 
 - canonical domain codes are lowercase text everywhere:
   - `vitamins`, `cleaning`, `baby`, `food`, `other`, `unknown`
+  - the current client rollout is vitamins-first even though the schema still supports broader domains
 - `products` and `ingredients` are the durable catalog entities
 - history/favorites are UI convenience snapshots, not product catalog truth
 - unmatched ingredients should be routed into review queues, not silently discarded

@@ -109,7 +109,7 @@ final class ProductGuidanceSignals {
             add(out, seen, "Some tradeoffs to weigh", "caution", "ingredient");
             return;
         }
-        if ("pending_ingredients".equalsIgnoreCase(scoringStatus) || "needs_ingredient_evidence".equalsIgnoreCase(scoringStatus)) {
+        if ("pending_ingredients".equalsIgnoreCase(scoringStatus) || "limited_ingredient_coverage".equalsIgnoreCase(scoringStatus)) {
             add(out, seen, "Guidance is still filling in", "info", "limited");
         }
     }

@@ -196,9 +196,9 @@ public record ProductView(
                 scoringStatus = "missing_ingredient_list";
                 scoringMessage = "This product listing does not include an ingredient list yet. We logged it for review.";
             } else if (coverageRatio < 0.6d) {
-                scoringStatus = "needs_ingredient_evidence";
+                scoringStatus = "limited_ingredient_coverage";
                 scoringMessage = "We only matched " + catalogIngredients + " of " + totalIngredients
-                        + " ingredients. Upload ingredient-label photos so we can seed the missing ones.";
+                        + " ingredients. We logged this product for manual review instead of guessing.";
             } else {
                 scoringStatus = "pending_ingredients";
                 scoringMessage = "We do not yet have enough authoritative evidence to score every ingredient in this product.";

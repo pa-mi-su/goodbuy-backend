@@ -44,15 +44,10 @@
             <artifactId>auth</artifactId>
         </dependency>
 
-        <!-- AWS S3 client for uploading product & missing-product photos -->
+        <!-- AWS S3 client for mirrored product images -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>textract</artifactId>
         </dependency>
 
         <dependency>

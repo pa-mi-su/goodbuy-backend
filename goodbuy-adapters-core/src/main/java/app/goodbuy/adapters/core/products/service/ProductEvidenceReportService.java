@@ -3,17 +3,14 @@ package app.goodbuy.adapters.core.products.service;
 import app.goodbuy.adapters.core.notifications.SlackNotificationAdapter;
 import app.goodbuy.adapters.core.products.model.ProductEvidenceReportEntity;
 import app.goodbuy.adapters.core.products.repo.ProductEvidenceReportRepository;
-import app.goodbuy.core.storage.ProductImageStoragePort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Set;
-import java.util.UUID;
 
 @Service
 @Transactional
@@ -37,16 +34,13 @@ public class ProductEvidenceReportService {
 
     private final ProductEvidenceReportRepository repo;
     private final SlackNotificationAdapter slack;
-    private final ProductImageStoragePort imageStorage;
 
     public ProductEvidenceReportService(
             ProductEvidenceReportRepository repo,
-            SlackNotificationAdapter slack,
-            ProductImageStoragePort imageStorage
+            SlackNotificationAdapter slack
     ) {
         this.repo = repo;
         this.slack = slack;
-        this.imageStorage = imageStorage;
     }
 
     public record ProductEvidenceReportResult(
@@ -61,11 +55,7 @@ public class ProductEvidenceReportService {
             String brand,
             String appVersion,
             String platform,
-            String notes,
-            byte[] frontImageBytes,
-            String frontContentType,
-            byte[] backImageBytes,
-            String backContentType
+            String notes
     ) {
         OffsetDateTime now = OffsetDateTime.now();
 
@@ -107,25 +97,9 @@ public class ProductEvidenceReportService {
         entity.setNotes(trimOrNull(notes));
         entity.setOccurredAt(now);
 
-        boolean frontProvided = (frontImageBytes != null && frontImageBytes.length > 0);
-        boolean backProvided  = (backImageBytes  != null && backImageBytes.length  > 0);
-
-        if (frontProvided) {
-            String url = uploadToS3(eanNorm, reasonNorm, "front", frontImageBytes, frontContentType);
-            entity.setFrontImageS3Url(url);
-        }
-
-        if (backProvided) {
-            String url = uploadToS3(eanNorm, reasonNorm, "back", backImageBytes, backContentType);
-            entity.setBackImageS3Url(url);
-        }
-
         ProductEvidenceReportEntity saved = repo.save(entity);
 
-        // Slack:
-        // - always notify on first report
-        // - notify again if user provided new images (so Slack has URLs)
-        if (isNew || frontProvided || backProvided) {
+        if (isNew) {
             slack.send(buildSlackText(saved));
         }
 
@@ -134,25 +108,6 @@ public class ProductEvidenceReportService {
 
     // ───────────────── helpers ─────────────────
 
-    private String uploadToS3(String ean, String reason, String kind, byte[] bytes, String contentType) {
-        String ct = (contentType == null || contentType.isBlank())
-                ? "image/jpeg"
-                : contentType;
-
-        String key = "product-evidence/"
-                + reason + "/"
-                + ean + "/"
-                + kind + "/"
-                + DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(OffsetDateTime.now()).replace(":", "")
-                + "_"
-                + UUID.randomUUID().toString().replace("-", "")
-                + ".jpg";
-
-        String url = imageStorage.uploadImage(key, bytes, ct);
-        log.info("ProductEvidenceReportService: uploaded {} image to S3 ean={} reason={} url={}", kind, ean, reason, url);
-        return url;
-    }
-
     private String buildSlackText(ProductEvidenceReportEntity e) {
         return "*Product Evidence Reported*\n"
                 + "• EAN: `" + e.getEan() + "`\n"
@@ -160,9 +115,7 @@ public class ProductEvidenceReportService {
                 + "• Status: `" + orDash(e.getStatus()) + "`\n"
                 + "• Name: " + orDash(e.getProductName()) + "\n"
                 + "• Brand: " + orDash(e.getBrand()) + "\n"
-                + "• Notes: " + orDash(e.getNotes()) + "\n"
-                + "• Front Image: " + orDash(e.getFrontImageS3Url()) + "\n"
-                + "• Back Image: " + orDash(e.getBackImageS3Url());
+                + "• Notes: " + orDash(e.getNotes());
     }
 
     private static String orDash(String v) {
