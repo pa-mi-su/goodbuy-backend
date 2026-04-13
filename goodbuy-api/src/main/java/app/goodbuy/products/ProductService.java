@@ -265,11 +265,7 @@ public class ProductService {
                     dto.brand(),
                     "backend-ingestion",
                     "backend",
-                    "External catalog returned no ingredient list.",
-                    null,
-                    null,
-                    null,
-                    null
+                    "External catalog returned no ingredient list."
             );
         } catch (Exception ex) {
             log.warn("ProductService.reportMissingIngredientList: failed gtin={} err={}", dto.gtin(), ex.toString());
@@ -307,11 +303,7 @@ public class ProductService {
                     dto.brand(),
                     "backend-ingestion",
                     "backend",
-                    notes,
-                    null,
-                    null,
-                    null,
-                    null
+                    notes
             );
         } catch (Exception ex) {
             log.warn("ProductService.reportLowCoverageIngredients: failed gtin={} err={}", dto.gtin(), ex.toString());

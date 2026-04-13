@@ -22,7 +22,7 @@ GoodBuy Backend is a modular Spring Boot service that powers the GoodBuy iOS app
 - **Async scan ingestion:** first-time scans return quickly while snapshot persistence, matching, and scoring continue in the background
 - **Immediate ingredient reads:** fresh scans can create provisional ingredient records and first-pass product scoring on the initial response
 - **Manual report intake:** weak or missing scans can be reported straight to the team with the UPC and any known product context
-- **Broader domain support:** food, vitamins, medicine, cleaners, soaps, personal care, baby, household, and related contact/ingestible domains are open for intake and classification
+- **Current product focus:** vitamins and supplements are the main supported barcode flow, while other categories can still be reported for manual review
 - **Evidence queue:** reported products are stored, deduped by UPC + reason, and forwarded to Slack for manual review
 - **Deterministic scoring:** product grades are driven by ingredient evidence and curated rules, not a “safe until proven unsafe” default
 
@@ -41,7 +41,7 @@ goodbuy-api (Spring Boot)
   -> HistoryController / FavoriteController
   -> MagicLinkAuthController / UserRegistrationController
   -> ProductEvidenceReportController
-  -> SessionTokenAuthFilter / admin APIs / upload APIs
+  -> SessionTokenAuthFilter / admin APIs
   -> AsyncProductIngestionService + AsyncIngredientResearchWorker
 
 goodbuy-core (domain + ports)
@@ -49,7 +49,7 @@ goodbuy-core (domain + ports)
 
 Adapters
   -> goodbuy-adapters-catalog: Open Facts / UPCitemdb / EAN-Search / EAN-DB
-  -> goodbuy-adapters-core: JPA, Flyway, storage, notifications, OCR, lookup, snapshot persistence
+  -> goodbuy-adapters-core: JPA, Flyway, storage, notifications, lookup, snapshot persistence
   -> goodbuy-adapters-enrichment: PubChem enrichment integrations
 
 PostgreSQL
@@ -60,7 +60,6 @@ PostgreSQL
 
 Amazon S3
   -> mirrored product imagery
-  -> optional evidence attachments for manual review
 ```
 
 ## End-To-End Scan Flow
@@ -202,7 +201,7 @@ Review and recovery tables:
 - `ingredient_missing_report`
 - `product_evidence_report`
 
-`product_evidence_report` stores the UPC, reason, latest app metadata, notes, and any optional evidence attachments associated with a manual review request.
+`product_evidence_report` stores the UPC, reason, latest app metadata, and notes associated with a manual review request.
 
 Additional schema notes live in [docs/schema-notes.md](/Users/pms/Documents/Projects/goodbuy-backend/docs/schema-notes.md).
 
@@ -224,7 +223,7 @@ The backend uses a rule-based safety model for both ingredient and product scori
 - Java 17
 - Maven
 - Docker / Docker Compose
-- AWS credentials for any enabled S3 / OCR / SES integrations
+- AWS credentials for any enabled S3 / SES integrations
 
 ### Run locally
 
@@ -247,19 +246,13 @@ docker compose up --build
 mvn verify
 ```
 
-### OCR / AI config notes
+### Integration config notes
 
 The local stack can use:
 
-- `GOODBUY_OCR_PROVIDER=textract`
-- `GOODBUY_OCR_AWS_REGION`
-- `GOODBUY_OCR_AWS_ACCESS_KEY`
-- `GOODBUY_OCR_AWS_SECRET_KEY`
 - `GOODBUY_SES_ACCESS_KEY`
 - `GOODBUY_SES_SECRET_KEY`
 - `OPENAI_API_KEY`
-
-In the current branch, OCR and SES can be configured with separate AWS credentials so Textract access does not break email delivery.
 
 ## Tech Stack
 
@@ -271,7 +264,6 @@ In the current branch, OCR and SES can be configured with separate AWS credentia
 | Persistence | Spring Data JPA |
 | Migrations | Flyway |
 | External Catalogs | EAN-DB, EAN-Search |
-| OCR | AWS Textract |
 | AI Product Analysis | OpenAI |
 | Ingredient Enrichment | OpenAI, PubChem |
 | Storage | Amazon S3 |
@@ -287,8 +279,7 @@ This backend is not just a CRUD API. It combines:
 - real-world catalog ingestion from imperfect third-party data
 - normalization and alias matching over messy ingredient strings
 - immediate provisional ingredient authoring for first-scan usability
-- AI-assisted recovery for missing or weak barcode results
-- OCR plus confidence-based automation for draft product creation
+- manual review for missing or weak barcode results
 - async workflows for latency-sensitive mobile scanning
 - rule-based risk scoring
 - explicit evidence and retry/review loops for bad data

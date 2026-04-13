@@ -11,9 +11,6 @@ import java.time.OffsetDateTime;
  *
  * Dedupe rule (ENFORCED BY DB):
  *   ONE ROW PER (ean, reason)
- *
- * This table ALSO stores S3 URLs for user-submitted photos
- * when reason = missing_product.
  */
 @Entity
 @Table(
@@ -72,61 +69,6 @@ public class ProductEvidenceReportEntity {
     @Column(columnDefinition = "text")
     private String notes;
 
-    // S3-hosted user images (used for missing_product)
-    @Column(name = "front_image_s3_url", columnDefinition = "text")
-    private String frontImageS3Url;
-
-    @Column(name = "back_image_s3_url", columnDefinition = "text")
-    private String backImageS3Url;
-
-    @Column(name = "ocr_status", nullable = false, length = 32)
-    private String ocrStatus;
-
-    @Column(name = "ocr_provider", length = 64)
-    private String ocrProvider;
-
-    @Column(name = "ocr_raw_text", columnDefinition = "text")
-    private String ocrRawText;
-
-    @Column(name = "parsed_ingredient_text", columnDefinition = "text")
-    private String parsedIngredientText;
-
-    @Column(name = "parsed_ingredient_count")
-    private Integer parsedIngredientCount;
-
-    @Column(name = "analysis_status", nullable = false, length = 32)
-    private String analysisStatus;
-
-    @Column(name = "analysis_provider", length = 64)
-    private String analysisProvider;
-
-    @Column(name = "analysis_confidence")
-    private Integer analysisConfidence;
-
-    @Column(name = "analysis_domain", length = 64)
-    private String analysisDomain;
-
-    @Column(name = "analysis_category", length = 255)
-    private String analysisCategory;
-
-    @Column(name = "analysis_product_name", length = 255)
-    private String analysisProductName;
-
-    @Column(name = "analysis_brand", length = 255)
-    private String analysisBrand;
-
-    @Column(name = "analysis_summary", columnDefinition = "text")
-    private String analysisSummary;
-
-    @Column(name = "analysis_raw_payload", columnDefinition = "text")
-    private String analysisRawPayload;
-
-    @Column(name = "draft_created_at")
-    private OffsetDateTime draftCreatedAt;
-
-    @Column(name = "last_reprocessed_at")
-    private OffsetDateTime lastReprocessedAt;
-
     /** Last time this evidence was observed/reported */
     @Column(name = "occurred_at", nullable = false)
     private OffsetDateTime occurredAt;
@@ -141,8 +83,6 @@ public class ProductEvidenceReportEntity {
         if (createdAt == null) createdAt = now;
         if (occurredAt == null) occurredAt = now;
         if (status == null || status.isBlank()) status = "REPORTED";
-        if (ocrStatus == null || ocrStatus.isBlank()) ocrStatus = "NOT_REQUESTED";
-        if (analysisStatus == null || analysisStatus.isBlank()) analysisStatus = "NOT_REQUESTED";
     }
 
     // ───── getters & setters ─────
@@ -172,60 +112,6 @@ public class ProductEvidenceReportEntity {
 
     public String getNotes() { return notes; }
     public void setNotes(String notes) { this.notes = notes; }
-
-    public String getFrontImageS3Url() { return frontImageS3Url; }
-    public void setFrontImageS3Url(String frontImageS3Url) { this.frontImageS3Url = frontImageS3Url; }
-
-    public String getBackImageS3Url() { return backImageS3Url; }
-    public void setBackImageS3Url(String backImageS3Url) { this.backImageS3Url = backImageS3Url; }
-
-    public String getOcrStatus() { return ocrStatus; }
-    public void setOcrStatus(String ocrStatus) { this.ocrStatus = ocrStatus; }
-
-    public String getOcrProvider() { return ocrProvider; }
-    public void setOcrProvider(String ocrProvider) { this.ocrProvider = ocrProvider; }
-
-    public String getOcrRawText() { return ocrRawText; }
-    public void setOcrRawText(String ocrRawText) { this.ocrRawText = ocrRawText; }
-
-    public String getParsedIngredientText() { return parsedIngredientText; }
-    public void setParsedIngredientText(String parsedIngredientText) { this.parsedIngredientText = parsedIngredientText; }
-
-    public Integer getParsedIngredientCount() { return parsedIngredientCount; }
-    public void setParsedIngredientCount(Integer parsedIngredientCount) { this.parsedIngredientCount = parsedIngredientCount; }
-
-    public String getAnalysisStatus() { return analysisStatus; }
-    public void setAnalysisStatus(String analysisStatus) { this.analysisStatus = analysisStatus; }
-
-    public String getAnalysisProvider() { return analysisProvider; }
-    public void setAnalysisProvider(String analysisProvider) { this.analysisProvider = analysisProvider; }
-
-    public Integer getAnalysisConfidence() { return analysisConfidence; }
-    public void setAnalysisConfidence(Integer analysisConfidence) { this.analysisConfidence = analysisConfidence; }
-
-    public String getAnalysisDomain() { return analysisDomain; }
-    public void setAnalysisDomain(String analysisDomain) { this.analysisDomain = analysisDomain; }
-
-    public String getAnalysisCategory() { return analysisCategory; }
-    public void setAnalysisCategory(String analysisCategory) { this.analysisCategory = analysisCategory; }
-
-    public String getAnalysisProductName() { return analysisProductName; }
-    public void setAnalysisProductName(String analysisProductName) { this.analysisProductName = analysisProductName; }
-
-    public String getAnalysisBrand() { return analysisBrand; }
-    public void setAnalysisBrand(String analysisBrand) { this.analysisBrand = analysisBrand; }
-
-    public String getAnalysisSummary() { return analysisSummary; }
-    public void setAnalysisSummary(String analysisSummary) { this.analysisSummary = analysisSummary; }
-
-    public String getAnalysisRawPayload() { return analysisRawPayload; }
-    public void setAnalysisRawPayload(String analysisRawPayload) { this.analysisRawPayload = analysisRawPayload; }
-
-    public OffsetDateTime getDraftCreatedAt() { return draftCreatedAt; }
-    public void setDraftCreatedAt(OffsetDateTime draftCreatedAt) { this.draftCreatedAt = draftCreatedAt; }
-
-    public OffsetDateTime getLastReprocessedAt() { return lastReprocessedAt; }
-    public void setLastReprocessedAt(OffsetDateTime lastReprocessedAt) { this.lastReprocessedAt = lastReprocessedAt; }
 
     public OffsetDateTime getOccurredAt() { return occurredAt; }
     public void setOccurredAt(OffsetDateTime occurredAt) { this.occurredAt = occurredAt; }
